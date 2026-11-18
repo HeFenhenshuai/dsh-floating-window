@@ -653,6 +653,8 @@ export function apply(ctx) {
       }
       const baseline = await readWorkspaceBaseline()
       return {
+        /** Where a new conversation should go unless the window picks another one. */
+        defaultWorkspaceId: await resolveDefaultWorkspaceId(),
         sessions: visible.map((row) => ({
           id: row.sessionId,
           title: titles.get(row.sessionId) ?? '',
@@ -695,6 +697,35 @@ export function apply(ctx) {
     } catch (error) {
       return []
     }
+  }
+
+  /**
+   * The workspace DSH itself calls the default one: the workspace that owns the
+   * Host's default working directory. A Session created from the floating window
+   * with no workspace in mind lands there, instead of becoming an orphan the DSH
+   * window cannot group into any 分区.
+   */
+  const resolveDefaultWorkspaceId = async () => {
+    try {
+      const registry = ctx.get('workspaceRegistry')
+      if (registry === undefined) return ''
+      const working = ctx.get('workingDirectory')
+      const directory = working !== undefined && typeof working.defaultDirectory === 'string'
+        ? working.defaultDirectory
+        : ''
+      if (directory !== '' && typeof registry.resolveByPath === 'function') {
+        const workspace = await registry.resolveByPath(directory)
+        if (workspace !== undefined && workspace !== null && workspace.id !== undefined) return String(workspace.id)
+      }
+      if (typeof registry.list === 'function') {
+        const rows = registry.list()
+        const first = Array.isArray(rows) ? rows[0] : undefined
+        if (first !== undefined && first !== null && first.id !== undefined) return String(first.id)
+      }
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-floating-window: default workspace lookup failed: ${messageOf(error)}`)
+    }
+    return ''
   }
 
   /** Validate one JSON request body field as a Session identity. */
@@ -1118,7 +1149,27 @@ export function apply(ctx) {
           : undefined
         const cwd = body !== undefined && typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined
         if (workspaceId !== undefined) request.workspaceId = workspaceId
-        else if (cwd !== undefined) request.cwd = cwd
+        else if (cwd !== undefined) {
+          // A directory is a hint: when a known workspace owns it, group the
+          // Session there instead of leaving it to a bare cwd.
+          let resolved = ''
+          try {
+            const registry = ctx.get('workspaceRegistry')
+            if (registry !== undefined && typeof registry.resolveByPath === 'function') {
+              const workspace = await registry.resolveByPath(cwd)
+              if (workspace !== undefined && workspace !== null && workspace.id !== undefined) resolved = String(workspace.id)
+            }
+          } catch (error) {
+            ctx.logger?.warn?.(`dsh-floating-window: workspace lookup failed: ${messageOf(error)}`)
+          }
+          if (resolved !== '') request.workspaceId = resolved
+          else request.cwd = cwd
+        } else {
+          // Neither a workspace nor a directory: the default workspace, so the
+          // new conversation shows up under a 分区 in the DSH window.
+          const fallback = await resolveDefaultWorkspaceId()
+          if (fallback !== '') request.workspaceId = fallback
+        }
         const lease = callBudget(20000)
         try {
           const value = await sessionController().create(request)

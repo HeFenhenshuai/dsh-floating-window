@@ -102,7 +102,7 @@
     @keyframes blink { 50% { opacity: .25; } }
 
     /* ── conversation bar (session picker + new chat + hand-off) ── */
-    .threadbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px 4px; }
+    .threadbar { position: relative; flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px 4px; }
     .menu { position: relative; min-width: 0; max-width: 70%; }
     #sessionsBtn {
       display: block;
@@ -115,6 +115,21 @@
       font-weight: 600;
     }
     #sessionsBtn:hover { color: var(--text); }
+    /* New-conversation workspace: one compact folder button beside ＋. It wears
+       the accent when a workspace other than the default one is chosen, so the
+       target is visible without opening the menu. */
+    #wsBtn { flex: none; }
+    #wsBtn svg { display: block; width: 15px; height: 15px; }
+    #wsBtn[data-custom='1'] { color: var(--accent); }
+    .wsMenuWrap { flex: none; max-width: none; }
+    #wsMenu { top: calc(100% + 4px); left: 4px; width: min(300px, calc(100% - 8px)); max-height: min(400px, calc(100vh - 120px)); }
+    .menuTitle {
+      display: block;
+      padding: 2px 4px;
+      color: var(--text-3);
+      font: 600 11px/16px var(--ui);
+      letter-spacing: .02em;
+    }
     .menuPanel {
       position: absolute;
       top: calc(100% + 6px);
@@ -419,6 +434,20 @@
       </div>
     </div>
     <button class="icon" id="btn-new" title="新对话">＋</button>
+    <div class="menu wsMenuWrap">
+      <button class="icon" id="wsBtn" type="button" title="新对话分区" aria-haspopup="menu" aria-expanded="false" aria-label="新对话分区">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M1.9 4.5c0-.7.6-1.2 1.2-1.2h2.9l1.3 1.4h5.6c.7 0 1.2.6 1.2 1.2v6.6c0 .7-.5 1.2-1.2 1.2H3.1c-.7 0-1.2-.5-1.2-1.2V4.5Z"
+                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="menuPanel" id="wsMenu" role="menu" hidden>
+      <div class="menuHeader"><span class="menuTitle">新对话建在哪个分区</span></div>
+      <div id="wsList" role="group" aria-label="分区"></div>
+      <div class="menuSep"></div>
+      <button class="menuItem" id="wsResetItem" type="button">恢复默认分区</button>
+    </div>
     <span class="grow"></span>
     <button class="chip" id="btn-main" title="在主窗口中打开这个会话">主窗口</button>
   </div>
@@ -566,6 +595,11 @@
   const sessionSearch = document.getElementById('sessionSearch')
   const cleanBlanksItem = document.getElementById('cleanBlanksItem')
   const openMainButton = document.getElementById('btn-main')
+  const newSessionItem = document.getElementById('newSessionItem')
+  const wsButton = document.getElementById('wsBtn')
+  const wsMenu = document.getElementById('wsMenu')
+  const wsList = document.getElementById('wsList')
+  const wsResetItem = document.getElementById('wsResetItem')
   const jumpButton = document.getElementById('jump')
   const thumbs = document.getElementById('thumbs')
   const attachButton = document.getElementById('attach')
@@ -587,6 +621,17 @@
   /** The rows the picker shows, newest first. */
   let sessions = []
   let workspaces = []
+  /** The workspace DSH treats as the default one; where a new conversation goes. */
+  let defaultWorkspaceId = ''
+  /** The window's own choice of 分区 for the next new conversation ('' = DSH's default). */
+  const NEW_SESSION_WORKSPACE_KEY = 'dsh-floating-window.new-session-workspace'
+  let newSessionWorkspaceId = (() => {
+    try {
+      return localStorage.getItem(NEW_SESSION_WORKSPACE_KEY) ?? ''
+    } catch (error) {
+      return ''
+    }
+  })()
   /** The DSH window's own archive/pin sets, so the picker agrees with it. */
   let archivedIds = []
   let pinnedIds = []
@@ -1230,6 +1275,23 @@
     return best !== undefined ? best.id : ''
   }
 
+  /**
+   * The reusable empty Session of one workspace, newest first — what "新对话" in
+   * that 分区 reopens instead of minting another blank.
+   */
+  function blankKeeperFor(workspaceId) {
+    const archived = new Set(archivedIds)
+    const current = sessions.filter((session) => session.id === sessionId)[0]
+    if (isBlank(current) && workspaceId !== '' && isWorkspaceMember(workspaceId, current.id)) return current.id
+    let best
+    for (const session of sessions) {
+      if (!isBlank(session) || archived.has(session.id)) continue
+      if (workspaceId !== '' && !isWorkspaceMember(workspaceId, session.id)) continue
+      if (best === undefined || session.updatedAt > best.updatedAt) best = session
+    }
+    return best !== undefined ? best.id : ''
+  }
+
   /** Visible rows in the DSH window's order. */
   function sessionRows() {
     const byId = new Map(sessions.map((session) => [session.id, session]))
@@ -1332,8 +1394,10 @@
       workspaces = Array.isArray(value.workspaces) ? value.workspaces : []
       archivedIds = Array.isArray(value.archived) ? value.archived.map(String) : []
       pinnedIds = Array.isArray(value.pinned) ? value.pinned.map(String) : []
+      defaultWorkspaceId = typeof value.defaultWorkspaceId === 'string' ? value.defaultWorkspaceId : ''
       sessionsAt = Date.now()
       renderSessionList()
+      syncWorkspaceUi()
       hostLog('sessions: ' + sessions.length + ' listed: ' + sessionRows().length
         + ' extraBlanks: ' + extraBlanks().length + ' keeper: ' + (blankKeeper() || 'none'))
       if (sessionId !== '') {
@@ -1345,7 +1409,104 @@
     }
   }
 
+  /* ── new-conversation workspace ────────────────────────────────────────────
+   * Every conversation belongs to a 分区, or the DSH window has nowhere to list
+   * it. New ones therefore start in DSH's default workspace (the workspace that
+   * owns the Host's default directory), and the folder button beside ＋ points
+   * them at another one for as long as the window stays open.
+   */
+  function workspaceLabel(id) {
+    const workspace = workspaces.filter((item) => item.id === id)[0]
+    if (workspace === undefined || workspace === null) return ''
+    const title = typeof workspace.title === 'string' ? workspace.title : ''
+    // The DSH sidebar shows the built-in default workspace as 默认工作区 even
+    // though its stored title is the directory name.
+    if (title === '' || (id === defaultWorkspaceId && title === 'default-workspace')) return title === '' ? baseName(workspace.path) : '默认工作区'
+    return title
+  }
+
+  /** The workspace a new conversation would be created in right now. */
+  function newSessionWorkspace() {
+    if (newSessionWorkspaceId !== '' && workspaceLabel(newSessionWorkspaceId) !== '') return newSessionWorkspaceId
+    if (defaultWorkspaceId !== '') return defaultWorkspaceId
+    return workspaceIdFor(sessionCwd)
+  }
+
+  function setNewSessionWorkspace(id) {
+    newSessionWorkspaceId = id
+    try {
+      if (id === '') localStorage.removeItem(NEW_SESSION_WORKSPACE_KEY)
+      else localStorage.setItem(NEW_SESSION_WORKSPACE_KEY, id)
+    } catch (error) {
+      // A window without storage still works for this session.
+    }
+    syncWorkspaceUi()
+  }
+
+  /** Reflect the target in the button tooltip, the ＋ menu row and the menu. */
+  function syncWorkspaceUi() {
+    const target = newSessionWorkspace()
+    const label = workspaceLabel(target)
+    wsButton.title = label === '' ? '新对话分区（跟随 DSH 默认）' : '新对话分区：' + label
+    wsButton.setAttribute('aria-label', wsButton.title)
+    wsButton.dataset.custom = target !== '' && target !== defaultWorkspaceId ? '1' : '0'
+    newSessionItem.textContent = label === '' ? '＋ 新对话' : '＋ 新对话 · ' + truncate(label, 12)
+    renderWorkspaceMenu()
+  }
+
+  function renderWorkspaceMenu() {
+    const target = newSessionWorkspace()
+    wsList.textContent = ''
+    if (workspaces.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'menuEmpty'
+      empty.textContent = '还没有分区'
+      wsList.appendChild(empty)
+      return
+    }
+    for (const workspace of workspaces) {
+      const isTarget = workspace.id === target
+      const node = document.createElement('button')
+      node.type = 'button'
+      node.className = 'sessionRow'
+      node.setAttribute('role', 'menuitemradio')
+      node.setAttribute('aria-checked', isTarget ? 'true' : 'false')
+      if (isTarget) node.setAttribute('aria-current', 'true')
+      node.title = [workspaceLabel(workspace.id), workspace.path].filter((part) => part !== '').join('\n')
+      const title = document.createElement('span')
+      title.className = 'sessionTitle'
+      title.textContent = (isTarget ? '✓ ' : '') + workspaceLabel(workspace.id)
+      const meta = document.createElement('span')
+      meta.className = 'sessionMeta'
+      meta.textContent = workspace.id === defaultWorkspaceId
+        ? '默认分区 · ' + baseName(workspace.path)
+        : baseName(workspace.path)
+      node.appendChild(title)
+      node.appendChild(meta)
+      node.addEventListener('click', () => {
+        setNewSessionWorkspace(workspace.id)
+        closeWorkspaceMenu()
+        setHint('新对话将建在「' + workspaceLabel(workspace.id) + '」', false)
+      })
+      wsList.appendChild(node)
+    }
+  }
+
+  function openWorkspaceMenu() {
+    closeMenu()
+    wsMenu.hidden = false
+    wsButton.setAttribute('aria-expanded', 'true')
+    renderWorkspaceMenu()
+  }
+
+  function closeWorkspaceMenu() {
+    if (wsMenu.hidden) return
+    wsMenu.hidden = true
+    wsButton.setAttribute('aria-expanded', 'false')
+  }
+
   function openMenu() {
+    closeWorkspaceMenu()
     sessionsMenu.hidden = false
     sessionsButton.setAttribute('aria-expanded', 'true')
     void refreshSessions(false)
@@ -1532,10 +1693,10 @@
   }
 
   /* ── sending ─────────────────────────────────────────────────────────────── */
-  async function createSession() {
-    // Creating inside the workspace is what puts the new conversation in the
-    // DSH window's list too; a bare cwd would leave it an orphan.
-    const workspaceId = workspaceIdFor(sessionCwd)
+  async function createSession(target) {
+    // Creating inside a workspace is what puts the new conversation under a 分区
+    // in the DSH window: the chosen one, else DSH's default, else the directory.
+    const workspaceId = typeof target === 'string' && target !== '' ? target : newSessionWorkspace()
     const payload = workspaceId !== ''
       ? { workspaceId }
       : sessionCwd === '' ? {} : { cwd: sessionCwd }
@@ -1553,7 +1714,8 @@
    * new Session per click is exactly how abandoned "新对话" rows pile up.
    */
   async function newConversation() {
-    const keeper = blankKeeper()
+    const target = newSessionWorkspace()
+    const keeper = blankKeeperFor(target)
     if (keeper !== '' && keeper !== sessionId) {
       closeMenu()
       await selectSession(keeper)
@@ -1566,7 +1728,7 @@
       return
     }
     closeMenu()
-    await createSession()
+    await createSession(target)
   }
 
   /** Retire the empty Sessions the picker folded away (undoable in the DSH window). */
@@ -1804,6 +1966,12 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      if (!wsMenu.hidden) {
+        closeWorkspaceMenu()
+        wsButton.focus()
+        event.preventDefault()
+        return
+      }
       if (!sessionsMenu.hidden) {
         closeMenu()
         sessionsButton.focus()
@@ -1846,6 +2014,10 @@
   // margins — closes it. Capture phase, so a handler that stops propagation in
   // the page can never leave the panel stuck open.
   document.addEventListener('pointerdown', (event) => {
+    if (!wsMenu.hidden) {
+      const clicked = event.target
+      if (clicked === null || (!wsMenu.contains(clicked) && !wsButton.contains(clicked))) closeWorkspaceMenu()
+    }
     if (sessionsMenu.hidden) return
     const target = event.target
     if (target !== null && (sessionsMenu.contains(target) || sessionsButton.contains(target))) return
@@ -1853,8 +2025,21 @@
   }, true)
   // Losing the window (switching to another app, clicking the native title bar)
   // closes it too, the way a desktop dropdown behaves.
-  window.addEventListener('blur', () => closeMenu())
-  document.getElementById('newSessionItem').addEventListener('click', () => {
+  window.addEventListener('blur', () => {
+    closeMenu()
+    closeWorkspaceMenu()
+  })
+  wsButton.addEventListener('click', (event) => {
+    event.stopPropagation()
+    if (wsMenu.hidden) openWorkspaceMenu()
+    else closeWorkspaceMenu()
+  })
+  wsResetItem.addEventListener('click', () => {
+    setNewSessionWorkspace('')
+    closeWorkspaceMenu()
+    setHint('新对话已恢复默认分区', false)
+  })
+  newSessionItem.addEventListener('click', () => {
     void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
   })
   cleanBlanksItem.addEventListener('click', () => {
