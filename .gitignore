@@ -1,0 +1,15 @@
+# Local dependencies and logs
+node_modules/
+*.log
+
+# Editor and Windows files
+.vs/
+*.user
+Thumbs.db
+Desktop.ini
+
+# Local window state
+/window/window-state.txt
+/window/webview-data/
+/window/window-log*.txt
+/window/float-settings.json
