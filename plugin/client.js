@@ -1,5 +1,5 @@
 /**
- * dsh-floating-window — browser half.
+ * dsh-floating-window-macos — browser half.
  *
  * Three registrations, all additive:
  *
@@ -21,7 +21,7 @@
  * own program.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-floating-window',
+  id: 'dsh-floating-window-macos',
   factory(require) {
     const React = require('react')
     const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
@@ -887,18 +887,18 @@ window.__ModuleLoader__.load({
             stopped = true
             clearInterval(timer)
           }
-        }, 'dsh-floating-window: open-in-main-window')
+        }, 'dsh-floating-window-macos: open-in-main-window')
 
         ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
           name: 'conversation.input.right',
-          id: 'dsh-floating-window',
+          id: 'dsh-floating-window-macos',
           order: 40,
         }, FloatChatButton))
 
         // Same seat 会话管理 uses: one settings page of its own in the nav.
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
-          id: 'dsh-floating-window',
+          id: 'dsh-floating-window-macos',
           order: 95,
           label: SECTION_LABEL,
         }, FloatSettingsSection))
