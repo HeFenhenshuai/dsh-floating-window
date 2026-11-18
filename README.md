@@ -33,7 +33,7 @@
 - **就是你的真实会话**：直接读写 DSH 的 Session，会话切换、历史追溯、多模态图文输入、新建会话都通。
 - **随时交接回主窗口**：一键把浮窗里的会话交还 DSH 主界面继续聊。
 
-> Windows 版是另一个独立仓库：[HeFenhenshuai/dsh-floating-window](https://github.com/HeFenhenshuai/dsh-floating-window)（WinForms + WebView2）。两个版本共用同一套页面与宿主路由，但各自独立发布、各自编译原生外壳。
+> 本仓库用分支区分两个版本：**`macos` 分支 = 本页（AppKit + WKWebView）**，[`main`](https://github.com/HeFenhenshuai/dsh-floating-window/tree/main) 分支 = Windows 版（WinForms + WebView2）。两者共用同一套页面与宿主路由，但各自独立编译原生外壳、独立安装（插件 id 不同，可以同时装）。
 
 ---
 
@@ -75,9 +75,9 @@
 ## 📥 安装
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/HeFenhenshuai/dsh-floating-window-macos.git
-cd dsh-floating-window-macos
+# 1. 克隆仓库的 macos 分支
+git clone -b macos https://github.com/HeFenhenshuai/dsh-floating-window.git
+cd dsh-floating-window
 
 # 2. 一般不用编译（已带通用二进制）；改过 Swift 源码才需要：
 (cd window && ./build.sh --universal)

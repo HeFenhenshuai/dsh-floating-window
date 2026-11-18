@@ -29,18 +29,22 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/HeFenhenshuai/dsh-floating-window-macos.git"
+    "url": "git+https://github.com/HeFenhenshuai/dsh-floating-window.git"
   },
-  "homepage": "https://github.com/HeFenhenshuai/dsh-floating-window-macos#readme",
+  "homepage": "https://github.com/HeFenhenshuai/dsh-floating-window/tree/macos#readme",
   "bugs": {
-    "url": "https://github.com/HeFenhenshuai/dsh-floating-window-macos/issues"
+    "url": "https://github.com/HeFenhenshuai/dsh-floating-window/issues"
   },
   "dsh": {
-    "bundle": { "patch": "./plugin/cordis.patch.yml" },
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   }
 }
