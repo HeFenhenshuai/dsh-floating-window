@@ -1,0 +1,19 @@
+# Local dependencies and logs
+node_modules/
+*.log
+
+# Editor files
+.vs/
+.vscode/
+.DS_Store
+*.user
+
+# Local window state (the real files live in
+# ~/Library/Application Support/dsh-floating-window)
+/window/window-state.txt
+/window/window-log*.txt
+/window/float-settings.json
+/window/clean-pending.txt
+
+# Build intermediates (the .app itself is shipped)
+/window/build/

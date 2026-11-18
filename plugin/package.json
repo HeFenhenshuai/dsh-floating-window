@@ -1,0 +1,45 @@
+{
+  "name": "dsh-floating-window-macos",
+  "version": "1.0.0",
+  "description": "macOS half of DSH Floating Window: pops a DSH conversation into a free-floating, always-on-top AppKit + WKWebView window usable over any other application. Pick any Session the DSH window lists, follow its transcript live, keep writing into it, and hand it back to the main window. Keeps the window's own 悬浮窗 settings page (appearance light / dark / follow-DSH / follow-system, always-on-top, remembered geometry, default size, opacity, session title in the title bar, Esc to close) and a cache-and-log cleanup card. host.js serves the page, the settings, the theme channel, the Session routes and the cache routes, and owns the window process; client.js adds the 浮窗 composer button, the 悬浮窗 settings page and the open-in-main-window hand-off; ../window/ is the Swift program that draws the window.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host.js",
+    "client.js",
+    "page/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "macos",
+    "float-window",
+    "always-on-top",
+    "chat"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HeFenhenshuai/dsh-floating-window-macos.git"
+  },
+  "homepage": "https://github.com/HeFenhenshuai/dsh-floating-window-macos#readme",
+  "bugs": {
+    "url": "https://github.com/HeFenhenshuai/dsh-floating-window-macos/issues"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

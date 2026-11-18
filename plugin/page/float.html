@@ -1,0 +1,1976 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>悬浮窗</title>
+  <style>
+    /* The same visual language DSH's own chat uses: alias tokens, a 16px capsule
+       composer with a circular accent send button, right-aligned user bubbles,
+       full-width assistant prose, one collapsible line for thinking and tools. */
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --layer: #1b1b1c;
+      --hover: rgba(255, 255, 255, .06);
+      --hairline: rgba(255, 255, 255, .10);
+      --bubble: rgba(255, 255, 255, .07);
+      --text: #ebeef2;
+      --text-2: #a9b0b8;
+      --text-3: #7c848c;
+      --accent: #4176e6;
+      --accent-hover: #7aaaff;
+      --accent-ink: #fff;
+      --danger: #ef4444;
+      --shadow: 0 2px 10px rgba(0, 0, 0, .28);
+      --radius-card: 16px;
+      --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Courier New", monospace;
+    }
+    /* 浅色外观：白底 + 浅灰卡片层；强调色不变，但悬停与错误色要往深里走。 */
+    html[data-theme='light'] {
+      color-scheme: light;
+      --bg: #fff;
+      --layer: #f5f6f7;
+      --hover: rgba(0, 0, 0, .05);
+      --hairline: rgba(0, 0, 0, .10);
+      --bubble: #eef1f5;
+      --text: #0f1115;
+      --text-2: #61666b;
+      --text-3: #8a9099;
+      --accent: #4176e6;
+      --accent-hover: #2f5fd0;
+      --accent-ink: #fff;
+      --danger: #d92d20;
+      --shadow: 0 2px 10px rgba(15, 17, 21, .10);
+    }
+
+    * { box-sizing: border-box; }
+    /* Any element with the `hidden` attribute must actually be hidden: the
+       author `display` rules below (flex, block) would otherwise beat the UA
+       stylesheet's `[hidden] { display: none }`. */
+    [hidden] { display: none !important; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/22px var(--ui);
+      overflow: hidden;
+      transition: background-color 140ms ease-out, color 140ms ease-out;
+      border-radius: inherit;
+    }
+
+    /* ── header (only used when the page is opened outside the native window) ── */
+    .bar {
+      -webkit-app-region: drag;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: none;
+      min-height: 36px;
+      padding: 4px 8px 4px 12px;
+      border-bottom: 1px solid var(--hairline);
+      user-select: none;
+    }
+    html[data-native='1'] .bar { display: none; }
+    .title { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+    .grow { flex: 1; }
+    .icon {
+      -webkit-app-region: no-drag;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-2);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 100ms ease-out, color 100ms ease-out;
+    }
+    .icon:hover { background: var(--hover); color: var(--text); }
+    .icon[aria-pressed='true'] { color: var(--accent); }
+    .pulse { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+    .pulse[data-state='running'] { background: var(--accent); animation: blink 1.1s ease-in-out infinite; }
+    .pulse[data-state='error'] { background: var(--danger); }
+    @keyframes blink { 50% { opacity: .25; } }
+
+    /* ── conversation bar (session picker + new chat + hand-off) ── */
+    .threadbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px 4px; }
+    .menu { position: relative; min-width: 0; max-width: 70%; }
+    #sessionsBtn {
+      display: block;
+      max-width: 100%;
+      padding: 4px 12px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      color: var(--text-2);
+      font-weight: 600;
+    }
+    #sessionsBtn:hover { color: var(--text); }
+    .menuPanel {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      width: min(340px, calc(100vw - 24px));
+      max-height: min(430px, calc(100vh - 140px));
+      display: flex;
+      flex-direction: column;
+      padding: 6px;
+      border: 1px solid var(--hairline);
+      border-radius: 14px;
+      background: var(--layer);
+      box-shadow: var(--shadow);
+      z-index: 30;
+    }
+    /* The author `display: flex` above would otherwise beat the UA rule for the
+       `hidden` attribute, so the picker would never actually disappear. */
+    .menuPanel[hidden] { display: none; }
+    .menuHeader { flex: none; padding: 2px 2px 6px; }
+    .menuInput {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid var(--hairline);
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text);
+      font: 12px/18px var(--ui);
+      outline: none;
+    }
+    .menuInput:focus { border-color: var(--accent); }
+    .menuInput::placeholder { color: var(--text-3); opacity: 1; }
+    .sessionList { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+    .sessionRow {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      width: 100%;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text-2);
+      text-align: left;
+      cursor: pointer;
+    }
+    .sessionRow:hover { background: var(--hover); color: var(--text); }
+    .sessionRow[aria-current='true'] { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--text); }
+    .sessionTitle { width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 13px/19px var(--ui); }
+    .sessionMeta { display: flex; align-items: center; gap: 5px; color: var(--text-3); font: 11px/16px var(--ui); }
+    .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.1s ease-in-out infinite; }
+    .menuItem {
+      display: block;
+      width: 100%;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text-2);
+      font: 12px/18px var(--ui);
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .menuItem:hover { background: var(--hover); color: var(--text); }
+    .menuItem.is-danger { color: var(--danger); }
+    .menuSep { flex: none; height: 1px; margin: 5px 4px; background: var(--hairline); }
+    .menuEmpty { padding: 8px 10px; color: var(--text-3); font-size: 12px; }
+    .chip {
+      padding: 4px 12px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-3);
+      font: 13px/20px var(--ui);
+      cursor: pointer;
+      transition: color 100ms ease-out, border-color 100ms ease-out, background-color 100ms ease-out;
+    }
+    .chip:hover { color: var(--text); }
+    .chip[aria-pressed='true'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+    /* ── transcript ── */
+    .logWrap { flex: 1; min-height: 0; position: relative; display: flex; }
+    .jump {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      transform: translateX(-50%);
+      background: var(--layer);
+      box-shadow: var(--shadow);
+      color: var(--text-2);
+    }
+    .jump:hover { color: var(--text); }
+    .log { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 6px; display: flex; flex-direction: column; gap: 10px; }
+    .empty { margin: auto; padding: 18px 10px; text-align: center; color: var(--text-3); font-size: 15px; line-height: 1.75; }
+
+    .msg { max-width: 88%; border-radius: var(--radius-card); padding: 9px 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .msg-user { align-self: flex-end; background: var(--bubble); border-bottom-right-radius: 5px; }
+    .msg-bot { line-height: 24px; align-self: stretch; max-width: 100%; padding: 1px 0; background: transparent; }
+    .msg-bot pre.code { white-space: pre; }
+    .msg-bot.is-streaming { opacity: .88; }
+    .msg-error { align-self: flex-start; max-width: 100%; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); background: transparent; color: var(--danger); }
+    .msg-pending { opacity: .55; }
+
+    .note { align-self: stretch; text-align: center; color: var(--text-3); font-size: 12px; padding: 2px 0; }
+    .note.is-thinking { animation: blink 1.3s ease-in-out infinite; }
+    .banner { align-self: stretch; padding: 6px 10px; border-radius: 10px; background: var(--hover); color: var(--text-3); font-size: 12px; }
+    /* Older history comes back one page at a time instead of all at once. */
+    .loadOlder {
+      flex: none;
+      align-self: stretch;
+      margin: 0;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 10px;
+      background: var(--hover);
+      color: var(--text-2);
+      font: 12px/18px var(--ui);
+      cursor: pointer;
+    }
+    .loadOlder:hover { color: var(--text); }
+    .loadOlder:disabled { opacity: .6; cursor: default; }
+    /* Attachments render as pictures; a missing one simply takes no space. */
+    .msg-image {
+      display: block;
+      max-width: 100%;
+      max-height: 300px;
+      margin: 6px 0 2px;
+      border-radius: 10px;
+      background: var(--hover);
+    }
+    .msg-image.is-failed { display: none; }
+
+    /* one collapsible line chrome for thinking and tool calls */
+    .tool { align-self: stretch; padding: 1px 0; font: 12px/19px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    details.think { align-self: stretch; margin: 0; color: var(--text-3); font-size: 12px; }
+    details.think > summary { cursor: pointer; list-style: none; user-select: none; }
+    details.think > summary::-webkit-details-marker { display: none; }
+    details.think > summary::before { content: '\25B8'; display: inline-block; width: 14px; }
+    details.think[open] > summary::before { content: '\25BE'; }
+    details.think > .think-body {
+      margin: 2px 0 4px 7px;
+      padding: 2px 0 2px 10px;
+      border-left: 1px solid var(--hairline);
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    /* One merged thinking block per turn: each step's reasoning is its own paragraph. */
+    details.think > .think-body .think-text { margin: 0 0 6px; white-space: pre-wrap; }
+    details.think > .think-body .think-text:last-child { margin-bottom: 0; }
+    details.think > .think-body .tool { white-space: pre-wrap; }
+    details.think > summary:hover { color: var(--text-2); }
+
+    pre.code {
+      margin: 6px 0 2px;
+      padding: 6px 0;
+      border-top: 1px solid var(--hairline);
+      background: transparent;
+      font: 12px/19px var(--mono);
+      color: var(--text-2);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: 320px;
+      overflow: auto;
+    }
+    code.inline { padding: 1px 5px; border-radius: 6px; background: var(--hover); font: 12px/19px var(--mono); }
+
+    /* ── capsule composer ── */
+    .composer { flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px 8px; padding: 8px 8px 6px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-card); background: var(--layer); box-shadow: var(--shadow); }
+    textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 132px;
+      padding: 2px 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--ui);
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 22px;
+      letter-spacing: normal;
+      font-variant-numeric: normal;
+      -webkit-font-smoothing: antialiased;
+      outline: none;
+      resize: none;
+      caret-color: var(--accent);
+      overflow-y: auto;
+    }
+    .row { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+    .attach { flex: none; width: 28px; height: 28px; border-radius: 8px; }
+    .attach svg { width: 16px; height: 16px; display: block; }
+    /* Pending attachments sit above the input until the message is sent. */
+    .thumbs { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px; }
+    .thumb { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--hairline); }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb button {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, .62);
+      color: #fff;
+      font: 11px/1 var(--ui);
+      cursor: pointer;
+    }
+    .thumb button:hover { background: rgba(0, 0, 0, .82); }
+    .hint { flex: 1; min-width: 0; color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hint[data-error='true'] { color: var(--danger); }
+    .send {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font: 15px/1 var(--ui);
+      cursor: pointer;
+      transition: background-color 100ms ease-out, transform 120ms ease-out, opacity 100ms ease-out;
+    }
+    .send:hover { background: var(--accent-hover); transform: scale(1.04); }
+    .send svg { width: 16px; height: 16px; display: block; }
+    .send:disabled { opacity: .5; cursor: default; }
+    .send[disabled] { background: var(--hover); color: var(--text-3); }
+    .send:active { transform: scale(.94); }
+
+    .icon, .chip, .menuItem, .send, .sessionRow, .menuInput, textarea, details.think > summary {
+      transition: background-color 100ms ease-out, color 100ms ease-out,
+                  border-color 100ms ease-out, opacity 100ms ease-out;
+    }
+    .icon:active, .chip:active, .menuItem:active, .sessionRow:active { opacity: .75; }
+    textarea:focus-visible, .menuInput:focus-visible { outline: none; }
+    .icon:focus-visible, .chip:focus-visible, .send:focus-visible, .menuItem:focus-visible, .sessionRow:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+      outline-offset: 1px;
+    }
+    .composer { transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
+    .composer:focus-within {
+      border-color: color-mix(in srgb, var(--accent) 42%, var(--hairline));
+      box-shadow: var(--shadow), 0 0 0 2px color-mix(in srgb, var(--accent) 9%, transparent);
+      background: color-mix(in srgb, var(--layer) 98%, var(--accent) 2%);
+    }
+    .composer:hover:not(:focus-within) { border-color: color-mix(in srgb, var(--text-3) 60%, var(--hairline)); }
+    textarea::placeholder { color: var(--text-3); opacity: 1; font: 14px/22px var(--ui); }
+
+    @keyframes msgIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+    .msg, .note, .tool, details.think, .banner { animation: msgIn 180ms ease-out; }
+    .msg-bot.is-streaming { animation: none; }
+
+    @keyframes menuIn { from { opacity: 0; transform: translateY(-2px) scale(.99); } to { opacity: 1; transform: none; } }
+    .menuPanel:not([hidden]) { animation: menuIn 140ms ease-out; }
+
+    .log::-webkit-scrollbar, .menuPanel::-webkit-scrollbar, .sessionList::-webkit-scrollbar,
+    textarea::-webkit-scrollbar, details.think > .think-body::-webkit-scrollbar { width: 6px; height: 6px; }
+    .log::-webkit-scrollbar-thumb, .menuPanel::-webkit-scrollbar-thumb, .sessionList::-webkit-scrollbar-thumb,
+    textarea::-webkit-scrollbar-thumb, details.think > .think-body::-webkit-scrollbar-thumb {
+      border-radius: 3px;
+      background: rgba(127, 127, 127, .35);
+    }
+    .log::-webkit-scrollbar-thumb:hover, .sessionList::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, .6); }
+    .log::-webkit-scrollbar-track, .menuPanel::-webkit-scrollbar-track, .sessionList::-webkit-scrollbar-track { background: transparent; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <span class="pulse" id="pulse" data-state="idle"></span>
+    <span class="title">悬浮窗</span>
+    <span class="grow"></span>
+    <button class="icon" id="btn-pin" title="取消置顶" aria-pressed="true">置顶</button>
+    <button class="icon" id="btn-min" title="最小化">—</button>
+    <button class="icon" id="btn-close" title="关闭">✕</button>
+  </header>
+
+  <div class="threadbar">
+    <div class="menu">
+      <button class="chip" id="sessionsBtn" aria-haspopup="menu" aria-expanded="false" title="切换会话">选择会话 ▾</button>
+      <div class="menuPanel" id="sessionsMenu" role="menu" hidden>
+        <div class="menuHeader">
+          <input class="menuInput" id="sessionSearch" type="search" placeholder="搜索会话…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="sessionList" id="sessionList" role="group" aria-label="会话列表"></div>
+        <div class="menuSep"></div>
+        <button class="menuItem" id="cleanBlanksItem" type="button" hidden></button>
+        <button class="menuItem" id="newSessionItem" type="button">＋ 新对话</button>
+        <button class="menuItem" id="openMainItem" type="button">在主窗口中打开</button>
+      </div>
+    </div>
+    <button class="icon" id="btn-new" title="新对话">＋</button>
+    <span class="grow"></span>
+    <button class="chip" id="btn-main" title="在主窗口中打开这个会话">主窗口</button>
+  </div>
+
+  <div class="logWrap">
+    <main class="log" id="log">
+      <p class="empty" id="empty">正在读取会话…</p>
+    </main>
+    <button class="chip jump" id="jump" hidden title="回到最新消息">↓ 最新</button>
+  </div>
+
+  <footer class="composer">
+    <div class="thumbs" id="thumbs" hidden></div>
+    <textarea id="input" rows="2" placeholder="输入消息…"></textarea>
+    <div class="row">
+      <span class="hint" id="hint"></span>
+      <button class="icon attach" id="attach" title="添加图片（也可直接粘贴或拖入）" aria-label="添加图片">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <circle cx="5.4" cy="6.2" r="1.15" fill="currentColor"/>
+          <path d="M2.6 12.2 6.4 8.6l2.4 2.2 2.1-1.9 2.5 3.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="send" id="send" title="发送（Enter）" aria-label="发送">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M8 12.9V4M4.3 7.6 8 3.9l3.7 3.7" fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    <input type="file" id="filePicker" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+  </footer>
+
+  <script>
+/**
+ * The floating window's conversation page.
+ *
+ * It is a normal client of the DSH Host: the picker lists every Session the DSH
+ * window lists, opening one follows its transcript live (`session/follow`, SSE),
+ * and a message typed here is prompted into that same Session. Switching
+ * conversation is therefore just picking another row — the conversation is not
+ * copied into the window, so the main window sees the same turns immediately.
+ *
+ * Protocol (all served by ../host.js):
+ *   GET  /dsh-floating-window/sessions              → { sessions, workspaces }
+ *   POST /dsh-floating-window/session/history       → { items, cursor, hasMore }
+ *   POST /dsh-floating-window/session/live          → { state, items, cursor }
+ *   POST /dsh-floating-window/session/prompt        → { accepted }
+ *   POST /dsh-floating-window/session/new           → { sessionId }
+ *   POST /dsh-floating-window/focus                 → hand this Session to the DSH window
+ *   GET  /dsh-floating-window/session/follow?sessionId=… → SSE: snapshot / item / stream-*
+ */
+(() => {
+  'use strict'
+
+  const params = new URLSearchParams(location.search)
+  /** The Session this window was opened from; empty when it opens on its own. */
+  const initialSession = params.get('session') ?? params.get('parent') ?? ''
+  const LAST_KEY = 'dsh-floating-window.last-session'
+  const LAST_WINDOW_KEY = 'dsh-floating-window.window'
+
+  /* ── appearance ───────────────────────────────────────────────────────────
+   * Three sources, most trustworthy first: the Host's official theme route
+   * (which reads DSH's ui-theme setting), the native window's push, the URL's
+   * first paint, and finally the system preference for the standalone page.
+   */
+  const useTheme = (value) => {
+    if (value === 'light' || value === 'dark') document.documentElement.setAttribute('data-theme', value)
+  }
+  useTheme(params.get('theme'))
+  const bridge = window.chrome && window.chrome.webview ? window.chrome.webview : undefined
+  let showSessionTitle = true
+  let closeOnEscape = false
+  if (bridge !== undefined) {
+    bridge.addEventListener('message', (event) => {
+      const data = event.data
+      if (data === null || typeof data !== 'object') return
+      if (data.type === 'theme') useTheme(data.theme)
+      else if (data.type === 'settings') applyWindowSettings(data.settings)
+      else if (data.type === 'clean-result') showToast(data.text)
+    })
+    // The page script runs before navigation completes: ask for theme + settings
+    // so the first paint is already right and the native header is not stale.
+    bridge.postMessage({ type: 'theme-request' })
+  } else {
+    const lightQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: light)') : undefined
+    if (lightQuery !== undefined) {
+      const fromSystem = () => { useTheme(lightQuery.matches ? 'light' : 'dark') }
+      fromSystem()
+      if (typeof lightQuery.addEventListener === 'function') lightQuery.addEventListener('change', fromSystem)
+    }
+  }
+
+  const knownTheme = (value) => value === 'light' || value === 'dark'
+  let lastObservedTheme
+  const pollTheme = () => fetch('/dsh-floating-window/theme', { headers: { accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : undefined))
+    .then((body) => {
+      const value = body !== null && body !== undefined ? body.value : undefined
+      if (value === undefined) return false
+      const theme = knownTheme(value.resolved) ? value.resolved : knownTheme(value.preference) ? value.preference : undefined
+      if (theme !== undefined) {
+        useTheme(theme)
+        if (bridge !== undefined && theme !== lastObservedTheme) {
+          lastObservedTheme = theme
+          bridge.postMessage({ type: 'theme-observed', theme })
+        }
+      }
+      return true
+    })
+    .catch(() => false)
+  // Only when there is no native window: that one is authoritative here.
+  if (bridge === undefined) {
+    void pollTheme().then((available) => { if (available) setInterval(pollTheme, 2000) })
+  }
+  if (window.__DSH_FLOAT_NATIVE__ === true) document.documentElement.setAttribute('data-native', '1')
+
+  /** Page problems go to the window's own log, so a stuck window stays diagnosable. */
+  const hostLog = (text) => {
+    if (bridge === undefined) return
+    try {
+      bridge.postMessage({ type: 'log', text: String(text) })
+    } catch (error) {
+      // The bridge is best effort.
+    }
+  }
+  window.addEventListener('error', (event) => {
+    hostLog('page error: ' + String(event && event.message ? event.message : event))
+  })
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event !== null && event !== undefined ? event.reason : undefined
+    hostLog('page rejection: ' + String(reason !== null && reason !== undefined && reason.message ? reason.message : reason))
+  })
+
+  /* ── elements ────────────────────────────────────────────────────────────── */
+  const log = document.getElementById('log')
+  const empty = document.getElementById('empty')
+  const input = document.getElementById('input')
+  const sendButton = document.getElementById('send')
+  const hint = document.getElementById('hint')
+  const pulse = document.getElementById('pulse')
+  const sessionsButton = document.getElementById('sessionsBtn')
+  const sessionsMenu = document.getElementById('sessionsMenu')
+  const sessionList = document.getElementById('sessionList')
+  const sessionSearch = document.getElementById('sessionSearch')
+  const cleanBlanksItem = document.getElementById('cleanBlanksItem')
+  const openMainButton = document.getElementById('btn-main')
+  const jumpButton = document.getElementById('jump')
+  const thumbs = document.getElementById('thumbs')
+  const attachButton = document.getElementById('attach')
+  const filePicker = document.getElementById('filePicker')
+  const composer = document.querySelector('.composer')
+  /** "Load older": one page of history at a time, kept at the top of the log. */
+  const loadOlderButton = document.createElement('button')
+  loadOlderButton.type = 'button'
+  loadOlderButton.className = 'loadOlder'
+  loadOlderButton.textContent = '加载更早的消息'
+  loadOlderButton.hidden = true
+  loadOlderButton.addEventListener('click', () => { void loadOlder() })
+
+  /* ── state ───────────────────────────────────────────────────────────────── */
+  /** The Session currently shown, or '' when the window is on a blank draft. */
+  let sessionId = ''
+  let sessionTitle = ''
+  let sessionCwd = ''
+  /** The rows the picker shows, newest first. */
+  let sessions = []
+  let workspaces = []
+  /** The DSH window's own archive/pin sets, so the picker agrees with it. */
+  let archivedIds = []
+  let pinnedIds = []
+  let sessionsAt = 0
+  /** Two-step confirmation for retiring the empty Sessions the picker folded away. */
+  let cleanArmed = false
+  let cleanTimer
+  /** Transcript rows already rendered, and the last event sequence consumed. */
+  const items = []
+  let lastSeq = -1
+  /** Oldest rendered message sequence and whether the log has older pages. */
+  let oldestSeq = -1
+  let hasOlder = false
+  let loadingOlder = false
+  /** Attachment bytes are fetched once per image and kept as data URLs. */
+  const imageCache = new Map()
+  /** The latest turn's single "思考过程" block (see ensureTurnDetails). */
+  let turnDetails
+  /** Whether new assistant rows belong to the turn that is still the latest. */
+  let currentTurnOpen = false
+  let busy = false
+  let pendingGhost
+  /** Images staged for the next message: { mediaType, data, name, previewUrl }. */
+  let pendingImages = []
+  const MAX_IMAGES = 4
+  const MAX_IMAGE_BYTES = 6 * 1024 * 1024
+  /** Total base64 budget for one message, keeping the request body under the route's cap. */
+  const MAX_IMAGE_CHARS = 30 * 1000 * 1000
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+  /** Desktop replies in the last few seconds are worth keeping visible. */
+  let hintUntil = 0
+  /** The last hint a poll wrote, so a later poll may clear exactly that one. */
+  let stateHint = ''
+
+  const followSource = { current: undefined }
+  let stateTimer
+  let historyLoading = false
+
+  /* streaming answer (typing) */
+  let liveNode
+  let liveThink
+  let liveTools
+  let liveText = ''
+  let liveReasoning = ''
+
+  /* ── small helpers ───────────────────────────────────────────────────────── */
+  const message = (error) => (error !== null && error !== undefined && error.message ? String(error.message) : String(error))
+
+  function setHint(text, isError) {
+    hint.textContent = text
+    hint.dataset.error = isError === true ? 'true' : 'false'
+    hintUntil = isError === true ? Date.now() + 8000 : 0
+  }
+
+  function setPulse(state) {
+    pulse.dataset.state = state
+  }
+
+  function nearBottom() {
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 60
+  }
+
+  function scrollDown(smooth) {
+    if (smooth) log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' })
+    else log.scrollTop = log.scrollHeight
+  }
+
+  async function api(path, payload) {
+    const request = payload === undefined
+      ? { method: 'GET', headers: { accept: 'application/json' } }
+      : { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) }
+    const response = await fetch(path, request)
+    const parsed = await response.json().catch(() => null)
+    if (!response.ok || parsed === null || parsed.ok !== true) {
+      const detail = parsed !== null && parsed !== undefined && parsed.error !== undefined ? parsed.error : 'HTTP ' + String(response.status)
+      throw new Error(String(detail))
+    }
+    return parsed.value
+  }
+
+  function relativeTime(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return ''
+    const diff = Date.now() - ms
+    if (diff < 60_000) return '刚刚'
+    if (diff < 3_600_000) return Math.floor(diff / 60_000) + ' 分钟前'
+    if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + ' 小时前'
+    const days = Math.floor(diff / 86_400_000)
+    if (days < 30) return days + ' 天前'
+    const date = new Date(ms)
+    return (date.getMonth() + 1) + '月' + date.getDate() + '日'
+  }
+
+  function baseName(path) {
+    const parts = String(path).split(/[\\/]/).filter((part) => part !== '')
+    return parts.length > 0 ? parts[parts.length - 1] : ''
+  }
+
+  /** The workspace a Session belongs to, when the registry knows it. */
+  function workspaceLabelOf(cwd) {
+    if (typeof cwd !== 'string' || cwd === '') return ''
+    let best
+    for (const workspace of workspaces) {
+      const path = typeof workspace.path === 'string' ? workspace.path : ''
+      if (path === '') continue
+      if (cwd === path || cwd.startsWith(path + '\\') || cwd.startsWith(path + '/')) {
+        if (best === undefined || path.length > best.path.length) best = workspace
+      }
+    }
+    if (best !== undefined) return best.title !== '' ? best.title : baseName(best.path)
+    return baseName(cwd)
+  }
+
+  function labelOf(session) {
+    if (session === null || session === undefined) return '会话'
+    if (typeof session.title === 'string' && session.title !== '') return session.title
+    if (session.blank === true) return '新对话'
+    return '未命名会话'
+  }
+
+  function truncate(text, max) {
+    const value = String(text)
+    return value.length > max ? value.slice(0, max) + '…' : value
+  }
+
+  /* ── transcript rendering ────────────────────────────────────────────────── */
+  /** The single "still working" row, always kept last in the transcript. */
+  const thinking = document.createElement('div')
+  thinking.className = 'note is-thinking'
+  thinking.textContent = '正在思考…'
+  thinking.hidden = true
+
+  function appendNode(node) {
+    const stick = nearBottom()
+    empty.hidden = true
+    if (thinking.parentNode === log) log.insertBefore(node, thinking)
+    else log.appendChild(node)
+    if (stick) scrollDown(false)
+    return node
+  }
+
+  function setThinking(active) {
+    thinking.hidden = active !== true
+    if (active === true) {
+      empty.hidden = true
+      log.appendChild(thinking)
+      if (nearBottom()) scrollDown(false)
+    }
+  }
+
+  function bubble(kind, text) {
+    const node = document.createElement('div')
+    node.className = 'msg ' + (kind === 'user' ? 'msg-user' : kind === 'error' ? 'msg-error' : 'msg-bot')
+    node.textContent = text
+    return node
+  }
+
+  /**
+   * Message text with the two things that matter for reading answers: fenced code
+   * blocks and inline code. Nodes are built with DOM calls, never HTML strings.
+   */
+  function renderRich(node, text) {
+    const parts = String(text).split('```')
+    for (let index = 0; index < parts.length; index++) {
+      const chunk = parts[index]
+      if (chunk === '') continue
+      if (index % 2 === 1) {
+        const pre = document.createElement('pre')
+        pre.className = 'code'
+        const code = document.createElement('code')
+        code.textContent = chunk.replace(/^[A-Za-z0-9+#._-]*\n/, '').replace(/\n$/, '')
+        pre.appendChild(code)
+        node.appendChild(pre)
+        continue
+      }
+      for (const piece of chunk.split(/(`[^`\n]+`)/)) {
+        if (piece === '') continue
+        if (piece.length > 2 && piece.charCodeAt(0) === 96 && piece.charCodeAt(piece.length - 1) === 96) {
+          const code = document.createElement('code')
+          code.className = 'inline'
+          code.textContent = piece.slice(1, -1)
+          node.appendChild(code)
+        } else {
+          node.appendChild(document.createTextNode(piece))
+        }
+      }
+    }
+  }
+
+  function thinkNode(text) {
+    const details = document.createElement('details')
+    details.className = 'think'
+    const summary = document.createElement('summary')
+    summary.textContent = '思考过程'
+    const body = document.createElement('div')
+    body.className = 'think-body'
+    body.textContent = text
+    details.appendChild(summary)
+    details.appendChild(body)
+    return details
+  }
+
+  function toolNode(tool) {
+    const node = document.createElement('div')
+    node.className = 'tool'
+    const label = typeof tool.name === 'string' ? tool.name : '工具'
+    const args = typeof tool.args === 'string' ? tool.args : ''
+    node.textContent = '⚙ ' + label + (args === '' ? '' : ' · ' + args)
+    node.title = args === '' ? label : label + ' ' + args
+    return node
+  }
+
+  /** Fetch one attachment's bytes once; resolved value is a data URL or undefined. */
+  function loadImage(ref, session) {
+    const key = session + '/' + String(ref.attachmentId)
+    let task = imageCache.get(key)
+    if (task !== undefined) return task
+    task = api('/dsh-floating-window/session/attachment', { sessionId: session, attachment: ref })
+      .then((value) => {
+        const data = value !== null && value !== undefined && typeof value.data === 'string' ? value.data : ''
+        if (data === '') return undefined
+        const mediaType = typeof ref.mediaType === 'string' && ref.mediaType !== '' ? ref.mediaType : 'image/png'
+        return 'data:' + mediaType + ';base64,' + data
+      })
+      .catch((error) => {
+        hostLog('image failed: ' + message(error))
+        return undefined
+      })
+    imageCache.set(key, task)
+    return task
+  }
+
+  /** Append image placeholders that fill themselves in when the bytes arrive. */
+  function appendImages(container, refs) {
+    if (!Array.isArray(refs)) return
+    const session = sessionId
+    for (const ref of refs) {
+      if (ref === null || typeof ref !== 'object' || typeof ref.attachmentId !== 'string') continue
+      const image = document.createElement('img')
+      image.className = 'msg-image'
+      image.alt = typeof ref.name === 'string' && ref.name !== '' ? ref.name : '图片'
+      image.loading = 'lazy'
+      container.appendChild(image)
+      void loadImage(ref, session).then((url) => {
+        if (url === undefined) image.classList.add('is-failed')
+        else image.src = url
+      })
+    }
+  }
+
+  function renderItem(item) {
+    if (item === null || typeof item !== 'object') return null
+    if (item.kind === 'user') {
+      const node = bubble('user', String(item.text ?? ''))
+      appendImages(node, item.images)
+      return node
+    }
+    if (item.kind === 'assistant') {
+      const frag = document.createDocumentFragment()
+      if (typeof item.text === 'string' && item.text !== '') {
+        const node = document.createElement('div')
+        node.className = 'msg msg-bot'
+        renderRich(node, item.text)
+        frag.appendChild(node)
+      }
+      appendImages(frag, item.images)
+      return frag.childNodes.length === 0 ? null : frag
+    }
+    return null
+  }
+
+  /* ── the turn's one "思考过程" block ────────────────────────────────────────
+   * Every step of a turn (reasoning + tool calls) folds into a single collapsible
+   * row instead of one row per step, and only the latest turn keeps its block.
+   */
+  function ensureTurnDetails() {
+    if (turnDetails !== undefined) return turnDetails
+    const details = document.createElement('details')
+    details.className = 'think'
+    const summary = document.createElement('summary')
+    summary.textContent = '思考过程'
+    const body = document.createElement('div')
+    body.className = 'think-body'
+    details.appendChild(summary)
+    details.appendChild(body)
+    if (liveNode !== undefined && liveNode.parentNode === log) log.insertBefore(details, liveNode)
+    else appendNode(details)
+    turnDetails = { details, summary, body, count: 0 }
+    return turnDetails
+  }
+
+  /** Fold one assistant step's reasoning and tool calls into the turn's block. */
+  function addStep(item) {
+    const reasoning = typeof item.reasoning === 'string' ? item.reasoning : ''
+    const tools = Array.isArray(item.tools) ? item.tools : []
+    if (reasoning === '' && tools.length === 0) return
+    const turn = ensureTurnDetails()
+    if (reasoning !== '') {
+      const text = document.createElement('div')
+      text.className = 'think-text'
+      text.textContent = reasoning
+      turn.body.appendChild(text)
+    }
+    for (const tool of tools) {
+      turn.body.appendChild(toolNode(tool))
+    }
+    turn.count += 1
+    turn.summary.textContent = '思考过程 · ' + turn.count + ' 步'
+  }
+
+  function hideTurnDetails() {
+    if (turnDetails === undefined) return
+    turnDetails.details.hidden = true
+    turnDetails = undefined
+  }
+
+  function appendItem(item) {
+    if (item === null || typeof item !== 'object') return
+    if (typeof item.seq === 'number') {
+      if (item.seq <= lastSeq) return
+      lastSeq = item.seq
+    }
+    // The committed message replaces the typing bubble: one answer, not two.
+    if (item.kind === 'assistant' && liveNode !== undefined) endStream('committed')
+    items.push(item)
+    if (item.kind === 'user') {
+      // A new turn starts here: the previous turn is no longer the latest one.
+      hideTurnDetails()
+      currentTurnOpen = true
+    }
+    if (item.kind === 'assistant' && currentTurnOpen === true) addStep(item)
+    const node = renderItem(item)
+    if (node !== null) appendNode(node)
+    if (item.kind === 'user' && pendingGhost !== undefined) {
+      pendingGhost.remove()
+      pendingGhost = undefined
+    }
+    empty.hidden = true
+  }
+
+  /** The oldest message sequence among rendered items, or -1. */
+  function minSeqOf(list) {
+    let min = -1
+    for (const item of list) {
+      const seq = typeof item.seq === 'number' ? item.seq : undefined
+      if (seq === undefined) continue
+      if (min === -1 || seq < min) min = seq
+    }
+    return min
+  }
+
+  /** Show or hide the "load older" control at the top of the conversation. */
+  function setOlderState() {
+    loadOlderButton.hidden = hasOlder !== true || sessionId === '' || loadingOlder === true
+    loadOlderButton.disabled = loadingOlder === true
+    loadOlderButton.textContent = loadingOlder === true ? '正在加载…' : '加载更早的消息'
+  }
+
+  function firstContentNode() {
+    for (const child of log.children) {
+      if (child === empty || child === loadOlderButton) continue
+      return child
+    }
+    return null
+  }
+
+  async function loadOlder() {
+    if (loadingOlder || sessionId === '' || oldestSeq <= 0) return
+    const id = sessionId
+    loadingOlder = true
+    setOlderState()
+    try {
+      const value = await api('/dsh-floating-window/session/history', {
+        sessionId: id,
+        beforeSeq: oldestSeq,
+        maxMessages: 160,
+      })
+      if (id !== sessionId) return
+      const older = Array.isArray(value.items) ? value.items : []
+      if (older.length === 0) {
+        hasOlder = false
+        return
+      }
+      const frag = document.createDocumentFragment()
+      for (const item of older) {
+        // Prepended rows are by definition older than the latest turn.
+        const node = renderItem(item, false)
+        if (node !== null) frag.appendChild(node)
+      }
+      const heightBefore = log.scrollHeight
+      const anchor = firstContentNode()
+      log.insertBefore(frag, anchor)
+      items.unshift(...older)
+      oldestSeq = minSeqOf(older)
+      hasOlder = value.hasMore === true
+      empty.hidden = items.length > 0
+      log.scrollTop += log.scrollHeight - heightBefore
+    } catch (error) {
+      setHint('更早的消息加载失败：' + message(error), true)
+    } finally {
+      loadingOlder = false
+      setOlderState()
+    }
+  }
+
+  function resetLog() {
+    log.textContent = ''
+    log.appendChild(loadOlderButton)
+    log.appendChild(empty)
+    empty.hidden = false
+    empty.textContent = '这个会话还没有消息，直接输入第一条吧'
+    items.length = 0
+    lastSeq = -1
+    oldestSeq = -1
+    hasOlder = false
+    loadingOlder = false
+    turnDetails = undefined
+    currentTurnOpen = false
+    pendingGhost = undefined
+    endStream('committed')
+    setThinking(false)
+    setOlderState()
+    syncJump()
+  }
+
+  function showEmptyIfNeeded() {
+    empty.hidden = items.length > 0
+  }
+
+  /* ── streaming answer ────────────────────────────────────────────────────── */
+  function beginStream() {
+    endStream('committed')
+    liveText = ''
+    liveReasoning = ''
+    liveNode = document.createElement('div')
+    liveNode.className = 'msg msg-bot is-streaming'
+    appendNode(liveNode)
+    setThinking(false)
+  }
+
+  function pushStreamText(text) {
+    if (typeof text !== 'string' || text === '') return
+    if (liveNode === undefined) beginStream()
+    liveText += text
+    liveNode.textContent = liveText
+    if (nearBottom()) scrollDown(false)
+  }
+
+  function pushStreamReasoning(text) {
+    if (typeof text !== 'string' || text === '') return
+    liveReasoning += text
+    if (liveThink === undefined) {
+      liveThink = document.createElement('details')
+      liveThink.className = 'think'
+      liveThink.open = false
+      const summary = document.createElement('summary')
+      summary.textContent = '思考中…'
+      const body = document.createElement('div')
+      body.className = 'think-body'
+      liveThink.appendChild(summary)
+      liveThink.appendChild(body)
+      if (liveNode !== undefined && liveNode.parentNode === log) log.insertBefore(liveThink, liveNode)
+      else appendNode(liveThink)
+    }
+    const body = liveThink.querySelector('.think-body')
+    if (body !== null) body.textContent = liveReasoning
+    if (nearBottom()) scrollDown(false)
+  }
+
+  function pushStreamTool(name) {
+    if (typeof name !== 'string' || name === '') return
+    if (liveTools === undefined) {
+      liveTools = document.createElement('div')
+      liveTools.className = 'tool'
+      if (liveNode !== undefined && liveNode.parentNode === log) log.insertBefore(liveTools, liveNode)
+      else appendNode(liveTools)
+    }
+    liveTools.textContent = '⚙ ' + name + ' 运行中…'
+    if (nearBottom()) scrollDown(false)
+  }
+
+  function endStream(outcome) {
+    if (liveThink !== undefined) {
+      liveThink.remove()
+      liveThink = undefined
+    }
+    if (liveTools !== undefined) {
+      liveTools.remove()
+      liveTools = undefined
+    }
+    if (liveNode !== undefined) {
+      if (outcome === 'abandoned' && liveText !== '') {
+        // Interrupted before the committed event: keep what the user already saw.
+        liveNode.classList.remove('is-streaming')
+        liveNode.textContent = liveText
+      } else {
+        liveNode.remove()
+      }
+      liveNode = undefined
+    }
+    liveText = ''
+    liveReasoning = ''
+  }
+
+  /* ── frames from the Host ────────────────────────────────────────────────── */
+  function applyFrame(frame) {
+    if (frame === null || typeof frame !== 'object') return
+    if (frame.type === 'snapshot') {
+      resetLog()
+      lastSeq = -1
+      const session = frame.session !== null && frame.session !== undefined ? frame.session : {}
+      if (typeof session.title === 'string') applyTitle(session.title)
+      if (typeof session.cwd === 'string') sessionCwd = session.cwd
+      for (const item of Array.isArray(frame.items) ? frame.items : []) appendItem(item)
+      if (typeof frame.cursor === 'number' && frame.cursor > lastSeq) lastSeq = frame.cursor
+      oldestSeq = minSeqOf(items)
+      hasOlder = frame.hasMore === true
+      setOlderState()
+      showEmptyIfNeeded()
+      setThinking(false)
+      scrollDown(false)
+      setHint('', false)
+      hostLog('snapshot: ' + (Array.isArray(frame.items) ? frame.items.length : 0) + ' rows, steps=' + (turnDetails !== undefined ? turnDetails.count : 0)
+        + ', thinkRows=' + [...log.querySelectorAll('.think')].filter((node) => node.hidden !== true).length
+        + ', cursor=' + String(frame.cursor) + ', hasMore=' + String(frame.hasMore === true))
+      return
+    }
+    if (frame.type === 'item') {
+      if (typeof frame.seq === 'number' && frame.seq <= lastSeq) return
+      if (frame.item !== null && frame.item !== undefined) appendItem(frame.item)
+      else if (typeof frame.seq === 'number') lastSeq = frame.seq
+      return
+    }
+    if (frame.type === 'stream-start') { beginStream(); return }
+    if (frame.type === 'stream-text') { pushStreamText(frame.text); return }
+    if (frame.type === 'stream-reasoning') { pushStreamReasoning(frame.text); return }
+    if (frame.type === 'stream-tool') { pushStreamTool(frame.name); return }
+    if (frame.type === 'stream-end') { endStream(frame.outcome); return }
+    if (frame.type === 'fault') {
+      setHint('会话流中断：' + String(frame.message ?? ''), true)
+      setPulse('error')
+    }
+  }
+
+  function applyState(state) {
+    if (state === null || typeof state !== 'object') return
+    const running = state.running === true
+    setPulse(running ? 'running' : 'idle')
+    const pending = Array.isArray(state.pendingInput) ? state.pendingInput : []
+    const queue = Array.isArray(state.queue) ? state.queue : []
+    let next = ''
+    if (pending.includes('approval') || pending.includes('question')) next = '等待你在主窗口中确认'
+    else if (busy) next = '发送中…'
+    else if (running && queue.length > 0) next = '排队中：' + queue.length + ' 条'
+    else if (running) next = '正在思考…'
+    // A deliberate error hint stays until its deadline; state chatter never eats it.
+    if (hint.dataset.error === 'true' && Date.now() < hintUntil) return
+    if (next !== '') {
+      setHint(next, false)
+      stateHint = next
+    } else if (hint.textContent === stateHint) {
+      setHint('', false)
+      stateHint = ''
+    }
+    if (running) {
+      if (liveNode === undefined && liveText === '') setThinking(true)
+    } else {
+      setThinking(false)
+    }
+  }
+
+  /* ── title / picker ──────────────────────────────────────────────────────── */
+  function applyTitle(title) {
+    sessionTitle = typeof title === 'string' ? title : ''
+    paintTitle()
+  }
+
+  function paintTitle() {
+    const clean = sessionTitle.trim()
+    document.title = showSessionTitle && clean !== '' ? '悬浮窗 · ' + clean : '悬浮窗'
+    sessionsButton.textContent = (clean === '' ? '选择会话' : truncate(clean, 18)) + ' ▾'
+    sessionsButton.title = clean === '' ? '切换会话' : clean
+    input.placeholder = clean === '' ? '输入第一个问题…' : '继续「' + truncate(clean, 12) + '」…'
+  }
+
+  function applySessionMeta(session) {
+    if (session === null || session === undefined) return
+    applyTitle(labelOf(session))
+    if (typeof session.cwd === 'string') sessionCwd = session.cwd
+  }
+
+  /* ── the picker's rows ─────────────────────────────────────────────────────
+   * Rows follow the DSH window: its workspace order, its pins first, and its
+   * archive set. Empty Sessions are folded into one "新对话" row — the client
+   * mints a reusable blank for every new conversation, so an abandoned one must
+   * not become its own permanent list entry.
+   */
+  const isBlank = (session) => session !== null && session !== undefined && session.blank === true
+
+  /** The workspace a directory belongs to, longest matching path wins. */
+  function workspaceIdFor(cwd) {
+    if (typeof cwd !== 'string' || cwd === '') return ''
+    let best = ''
+    let bestLength = -1
+    for (const workspace of workspaces) {
+      const path = typeof workspace.path === 'string' ? workspace.path : ''
+      if (path === '') continue
+      if (cwd === path || cwd.startsWith(path + '\\') || cwd.startsWith(path + '/')) {
+        if (path.length > bestLength) {
+          best = workspace.id
+          bestLength = path.length
+        }
+      }
+    }
+    return best
+  }
+
+  function isWorkspaceMember(workspaceId, id) {
+    const workspace = workspaces.filter((item) => item.id === workspaceId)[0]
+    return workspace !== undefined && Array.isArray(workspace.sessionIds)
+      && workspace.sessionIds.includes(id)
+  }
+
+  /** The one empty Session the picker shows: the current blank, else the newest. */
+  function blankKeeper() {
+    const archived = new Set(archivedIds)
+    const current = sessions.filter((session) => session.id === sessionId)[0]
+    if (isBlank(current)) return current.id
+    // Only a blank the DSH window itself accounts for in this workspace may be
+    // reopened; an abandoned orphan blank is cleanup material, not a "新对话".
+    const workspaceId = workspaceIdFor(current !== undefined ? current.cwd : '')
+    let best
+    for (const session of sessions) {
+      if (!isBlank(session) || archived.has(session.id)) continue
+      if (workspaceId !== '') {
+        if (!isWorkspaceMember(workspaceId, session.id)) continue
+      } else if (current !== undefined && session.cwd !== current.cwd) {
+        continue
+      }
+      if (best === undefined || session.updatedAt > best.updatedAt) best = session
+    }
+    return best !== undefined ? best.id : ''
+  }
+
+  /** Visible rows in the DSH window's order. */
+  function sessionRows() {
+    const byId = new Map(sessions.map((session) => [session.id, session]))
+    const archived = new Set(archivedIds)
+    const pinned = new Set(pinnedIds)
+    const keeper = blankKeeper()
+    const rows = []
+    const placed = new Set()
+    const add = (session, where) => {
+      if (session === undefined || session === null || placed.has(session.id)) return
+      if (archived.has(session.id)) return
+      if (isBlank(session) && session.id !== keeper) return
+      placed.add(session.id)
+      rows.push({ session, where, pinned: pinned.has(session.id) })
+    }
+    for (const workspace of workspaces) {
+      const ids = Array.isArray(workspace.sessionIds) ? workspace.sessionIds : []
+      const where = typeof workspace.title === 'string' && workspace.title !== ''
+        ? workspace.title
+        : baseName(workspace.path)
+      for (const id of ids) add(byId.get(id), where)
+    }
+    for (const session of sessions) add(session, workspaceLabelOf(session.cwd))
+    rows.sort((left, right) => (right.pinned ? 1 : 0) - (left.pinned ? 1 : 0))
+    return rows
+  }
+
+  /** Empty Sessions the picker folded away — the ones a cleanup may retire. */
+  function extraBlanks() {
+    const archived = new Set(archivedIds)
+    const keeper = blankKeeper()
+    return sessions.filter((session) => isBlank(session) && !archived.has(session.id)
+      && session.id !== keeper && session.id !== sessionId)
+  }
+
+  function renderSessionList() {
+    const query = sessionSearch.value.trim().toLowerCase()
+    sessionList.textContent = ''
+    const rows = sessionRows().filter((row) => {
+      if (query === '') return true
+      return labelOf(row.session).toLowerCase().includes(query)
+        || String(row.session.cwd ?? '').toLowerCase().includes(query)
+    })
+    if (rows.length === 0) {
+      const node = document.createElement('div')
+      node.className = 'menuEmpty'
+      node.textContent = query === '' ? '还没有其它会话' : '没有匹配的会话'
+      sessionList.appendChild(node)
+      renderCleanupRow()
+      return
+    }
+    for (const row of rows) {
+      const session = row.session
+      const node = document.createElement('button')
+      node.type = 'button'
+      node.className = 'sessionRow'
+      node.dataset.id = session.id
+      if (session.id === sessionId) node.setAttribute('aria-current', 'true')
+      node.title = labelOf(session)
+      const title = document.createElement('span')
+      title.className = 'sessionTitle'
+      title.textContent = labelOf(session)
+      const meta = document.createElement('span')
+      meta.className = 'sessionMeta'
+      if (session.running === true) {
+        const dot = document.createElement('span')
+        dot.className = 'dot'
+        meta.appendChild(dot)
+      }
+      const when = relativeTime(session.updatedAt)
+      meta.appendChild(document.createTextNode([row.where, when].filter((part) => part !== '').join(' · ') || '会话'))
+      node.appendChild(title)
+      node.appendChild(meta)
+      node.addEventListener('click', () => {
+        closeMenu()
+        void selectSession(session.id)
+      })
+      sessionList.appendChild(node)
+    }
+    renderCleanupRow()
+  }
+
+  function renderCleanupRow() {
+    const extras = extraBlanks()
+    cleanBlanksItem.hidden = extras.length === 0
+    if (extras.length === 0) return
+    cleanBlanksItem.textContent = cleanArmed
+      ? '再点一次：隐藏这 ' + extras.length + ' 个空会话'
+      : '清理多余的空会话（' + extras.length + '）'
+  }
+
+  async function refreshSessions(force) {
+    if (force !== true && sessionsAt !== 0 && Date.now() - sessionsAt < 5000) {
+      renderSessionList()
+      return
+    }
+    try {
+      const value = await api('/dsh-floating-window/sessions')
+      sessions = Array.isArray(value.sessions) ? value.sessions : []
+      workspaces = Array.isArray(value.workspaces) ? value.workspaces : []
+      archivedIds = Array.isArray(value.archived) ? value.archived.map(String) : []
+      pinnedIds = Array.isArray(value.pinned) ? value.pinned.map(String) : []
+      sessionsAt = Date.now()
+      renderSessionList()
+      hostLog('sessions: ' + sessions.length + ' listed: ' + sessionRows().length
+        + ' extraBlanks: ' + extraBlanks().length + ' keeper: ' + (blankKeeper() || 'none'))
+      if (sessionId !== '') {
+        const known = sessions.filter((session) => session.id === sessionId)[0]
+        if (known !== undefined) applySessionMeta(known)
+      }
+    } catch (error) {
+      setHint('会话列表读取失败：' + message(error), true)
+    }
+  }
+
+  function openMenu() {
+    sessionsMenu.hidden = false
+    sessionsButton.setAttribute('aria-expanded', 'true')
+    void refreshSessions(false)
+    sessionSearch.focus()
+    sessionSearch.select()
+  }
+
+  function closeMenu() {
+    if (sessionsMenu.hidden) return
+    sessionsMenu.hidden = true
+    sessionsButton.setAttribute('aria-expanded', 'false')
+    cleanArmed = false
+  }
+
+  function rememberSession() {
+    try {
+      if (sessionId === '') localStorage.removeItem(LAST_KEY)
+      else localStorage.setItem(LAST_KEY, sessionId)
+    } catch (error) {
+      // Preference persistence is best effort.
+    }
+  }
+
+  function readLastSession() {
+    try {
+      return localStorage.getItem(LAST_KEY) ?? ''
+    } catch (error) {
+      return ''
+    }
+  }
+
+  function updateUrl() {
+    try {
+      const url = new URL(location.href)
+      url.searchParams.delete('parent')
+      if (sessionId === '') url.searchParams.delete('session')
+      else url.searchParams.set('session', sessionId)
+      history.replaceState(null, '', url.href)
+    } catch (error) {
+      // A failed URL rewrite never breaks the window.
+    }
+  }
+
+  /* ── selecting a conversation ────────────────────────────────────────────── */
+  async function selectSession(id, options) {
+    if (typeof id !== 'string' || id === '') return
+    const reload = options !== undefined && options.reload === true
+    if (id === sessionId && !reload) {
+      input.focus()
+      return
+    }
+    closeFollow()
+    sessionId = id
+    sessionTitle = ''
+    sessionCwd = ''
+    rememberSession()
+    updateUrl()
+    resetLog()
+    setPulse('idle')
+    setHint('正在载入会话…', false)
+    const known = sessions.filter((session) => session.id === id)[0]
+    if (known !== undefined) applySessionMeta(known)
+    const live = await startFollow(id)
+    if (!live) {
+      hostLog('follow unavailable; falling back to polling')
+      await loadHistory()
+    }
+    startStateLoop()
+    if (nearBottom()) scrollDown(false)
+    hostLog('selected ' + id + ' listed: ' + sessionRows().length + ' extras: ' + extraBlanks().length)
+    input.focus()
+  }
+
+  function startFollow(id) {
+    closeFollow()
+    return new Promise((resolve) => {
+      let settled = false
+      const settle = (value) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      let opened = false
+      let errors = 0
+      let source
+      try {
+        source = new EventSource('/dsh-floating-window/session/follow?sessionId=' + encodeURIComponent(id))
+      } catch (error) {
+        settle(false)
+        return
+      }
+      followSource.current = source
+      source.onopen = () => {
+        opened = true
+        settle(true)
+      }
+      source.onmessage = (event) => {
+        if (id !== sessionId) return
+        opened = true
+        settle(true)
+        let frame
+        try {
+          frame = JSON.parse(event.data)
+        } catch (error) {
+          return
+        }
+        applyFrame(frame)
+      }
+      source.onerror = () => {
+        errors += 1
+        if (!opened || errors >= 3) {
+          // Only this stream may be closed: a later selection already replaced it.
+          if (followSource.current === source) closeFollow()
+          settle(false)
+        }
+      }
+      // A slow Host (or a plain HTTP page in a browser) must not leave the window
+      // waiting: the poll below is the safety net either way.
+      setTimeout(() => settle(opened), 2500)
+    })
+  }
+
+  function closeFollow() {
+    const source = followSource.current
+    followSource.current = undefined
+    if (source !== undefined) {
+      try {
+        source.close()
+      } catch (error) {
+        // Closing an already-dead stream is fine.
+      }
+    }
+  }
+
+  async function loadHistory() {
+    if (sessionId === '' || historyLoading) return
+    historyLoading = true
+    const id = sessionId
+    try {
+      const value = await api('/dsh-floating-window/session/history', { sessionId: id, maxMessages: 160 })
+      if (id !== sessionId) return
+      resetLog()
+      lastSeq = -1
+      for (const item of Array.isArray(value.items) ? value.items : []) appendItem(item)
+      if (typeof value.cursor === 'number' && value.cursor > lastSeq) lastSeq = value.cursor
+      oldestSeq = minSeqOf(items)
+      hasOlder = value.hasMore === true
+      setOlderState()
+      showEmptyIfNeeded()
+      setThinking(false)
+      setHint('', false)
+      scrollDown(false)
+    } catch (error) {
+      if (id === sessionId) {
+        setHint('会话载入失败：' + message(error), true)
+        setPulse('error')
+      }
+    } finally {
+      historyLoading = false
+    }
+  }
+
+  function startStateLoop() {
+    if (stateTimer !== undefined) clearInterval(stateTimer)
+    stateTimer = setInterval(() => { void pollState() }, 1200)
+    void pollState()
+  }
+
+  async function pollState() {
+    if (sessionId === '' || document.hidden === true) return
+    const id = sessionId
+    try {
+      const value = await api('/dsh-floating-window/session/live', { sessionId: id, after: lastSeq })
+      if (id !== sessionId) return
+      applyState(value.state)
+      for (const item of Array.isArray(value.items) ? value.items : []) appendItem(item)
+      if (typeof value.cursor === 'number' && value.cursor > lastSeq) lastSeq = value.cursor
+    } catch (error) {
+      if (id === sessionId) {
+        setPulse('error')
+        setHint('会话状态读取失败：' + message(error), true)
+      }
+    }
+  }
+
+  /* ── sending ─────────────────────────────────────────────────────────────── */
+  async function createSession() {
+    // Creating inside the workspace is what puts the new conversation in the
+    // DSH window's list too; a bare cwd would leave it an orphan.
+    const workspaceId = workspaceIdFor(sessionCwd)
+    const payload = workspaceId !== ''
+      ? { workspaceId }
+      : sessionCwd === '' ? {} : { cwd: sessionCwd }
+    const value = await api('/dsh-floating-window/session/new', payload)
+    const id = value !== null && value !== undefined && typeof value.sessionId === 'string' ? value.sessionId : ''
+    if (id === '') throw new Error('新会话创建失败')
+    sessionsAt = 0
+    await selectSession(id)
+    return id
+  }
+
+  /**
+   * "新对话" reopens the workspace's existing empty Session instead of minting
+   * another blank: the DSH client keeps one reusable blank per workspace, and a
+   * new Session per click is exactly how abandoned "新对话" rows pile up.
+   */
+  async function newConversation() {
+    const keeper = blankKeeper()
+    if (keeper !== '' && keeper !== sessionId) {
+      closeMenu()
+      await selectSession(keeper)
+      setHint('', false)
+      return
+    }
+    if (keeper !== '' && keeper === sessionId) {
+      closeMenu()
+      input.focus()
+      return
+    }
+    closeMenu()
+    await createSession()
+  }
+
+  /** Retire the empty Sessions the picker folded away (undoable in the DSH window). */
+  async function archiveBlanks(extras) {
+    let hidden = 0
+    for (const session of extras) {
+      try {
+        const value = await api('/dsh-floating-window/session/archive', { sessionId: session.id })
+        const archived = value !== null && value !== undefined ? value.archivedSessionIds : undefined
+        archivedIds = Array.isArray(archived) ? archived.map(String) : archivedIds.concat([session.id])
+        hidden += 1
+      } catch (error) {
+        hostLog('archive failed: ' + message(error))
+      }
+    }
+    sessionsAt = 0
+    await refreshSessions(true)
+    setHint(hidden > 0 ? '已隐藏 ' + hidden + ' 个空会话（可在 DSH 主窗口恢复）' : '清理失败', hidden === 0)
+  }
+
+  async function send() {
+    const text = input.value.trim()
+    if ((text === '' && pendingImages.length === 0) || busy) return
+    busy = true
+    syncSend()
+    try {
+      if (sessionId === '') await createSession()
+      const images = pendingImages.map((image) => ({ mediaType: image.mediaType, data: image.data, name: image.name }))
+      const payload = {
+        sessionId,
+        text,
+        images,
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }
+      input.value = ''
+      growInput()
+      const ghost = bubble('user', text === '' ? '［图片］' : text)
+      ghost.classList.add('msg-pending')
+      appendNode(ghost)
+      pendingGhost = ghost
+      scrollDown(true)
+      setPulse('running')
+      setHint('发送中…', false)
+      await api('/dsh-floating-window/session/prompt', payload)
+      clearImages()
+      setThinking(true)
+      setHint('', false)
+      setPulse('running')
+      hostLog('prompt sent to ' + sessionId + (images.length > 0 ? ' with ' + images.length + ' image(s)' : ''))
+    } catch (error) {
+      if (pendingGhost !== undefined) {
+        pendingGhost.remove()
+        pendingGhost = undefined
+      }
+      setThinking(false)
+      setPulse('error')
+      appendError('发送失败：' + message(error))
+      setHint('发送失败', true)
+      if (input.value.trim() === '') {
+        input.value = text
+        growInput()
+      }
+      sessionsAt = 0
+    } finally {
+      busy = false
+      syncSend()
+      input.focus()
+    }
+  }
+
+  function appendError(text) {
+    appendNode(bubble('error', text))
+    showEmptyIfNeeded()
+  }
+
+  /* ── hand-off to the DSH window ──────────────────────────────────────────── */
+  async function openInMainWindow() {
+    if (sessionId === '') {
+      setHint('先选择一个会话', false)
+      return
+    }
+    const id = sessionId
+    try {
+      await api('/dsh-floating-window/focus', { sessionId: id })
+      setHint('已在 DSH 主窗口中打开', false)
+    } catch (error) {
+      setHint('主窗口打开失败：' + message(error), true)
+    }
+  }
+
+  /* ── composer plumbing ───────────────────────────────────────────────────── */
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : ''
+        const comma = result.indexOf(',')
+        resolve(comma >= 0 ? result.slice(comma + 1) : '')
+      }
+      reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  /** Stage pasted / dropped / picked images, up to the same budget the composer shows. */
+  async function addImageFiles(files) {
+    const list = Array.from(files ?? []).filter((file) => file instanceof File)
+    if (list.length === 0) return
+    for (const file of list) {
+      if (pendingImages.length >= MAX_IMAGES) {
+        setHint('一条消息最多 ' + MAX_IMAGES + ' 张图片', true)
+        break
+      }
+      if (IMAGE_TYPES.indexOf(file.type) < 0) {
+        setHint('只支持 PNG / JPEG / WebP / GIF', true)
+        continue
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setHint('图片太大（单张上限 6 MB）', true)
+        continue
+      }
+      try {
+        const data = await fileToBase64(file)
+        if (data === '') continue
+        const used = pendingImages.reduce((total, image) => total + image.data.length, 0)
+        if (used + data.length > MAX_IMAGE_CHARS) {
+          setHint('图片总大小超出上限', true)
+          continue
+        }
+        pendingImages.push({ mediaType: file.type, data, name: file.name, previewUrl: URL.createObjectURL(file) })
+      } catch (error) {
+        setHint('图片读取失败：' + message(error), true)
+      }
+    }
+    renderThumbs()
+    syncSend()
+  }
+
+  function clearImages() {
+    for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl)
+    pendingImages = []
+    renderThumbs()
+    syncSend()
+  }
+
+  function renderThumbs() {
+    thumbs.textContent = ''
+    thumbs.hidden = pendingImages.length === 0
+    for (const image of pendingImages) {
+      const cell = document.createElement('div')
+      cell.className = 'thumb'
+      const preview = document.createElement('img')
+      preview.src = image.previewUrl
+      preview.alt = image.name === '' ? '图片' : image.name
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.title = '移除'
+      remove.textContent = '×'
+      remove.addEventListener('click', () => {
+        URL.revokeObjectURL(image.previewUrl)
+        pendingImages = pendingImages.filter((item) => item !== image)
+        renderThumbs()
+        syncSend()
+      })
+      cell.appendChild(preview)
+      cell.appendChild(remove)
+      thumbs.appendChild(cell)
+    }
+  }
+
+  function growInput() {
+    input.style.height = 'auto'
+    input.style.height = Math.min(input.scrollHeight, 132) + 'px'
+  }
+
+  function syncSend() {
+    sendButton.disabled = busy || (input.value.trim() === '' && pendingImages.length === 0)
+  }
+
+  function syncJump() {
+    jumpButton.hidden = nearBottom()
+  }
+
+  function applyWindowSettings(settings) {
+    if (settings === null || typeof settings !== 'object') return
+    if (typeof settings.showSessionTitle === 'boolean') {
+      showSessionTitle = settings.showSessionTitle
+      paintTitle()
+    }
+    if (typeof settings.closeOnEscape === 'boolean') closeOnEscape = settings.closeOnEscape
+  }
+
+  /* ── ephemeral toast (cache cleanup results) ─────────────────────────────── */
+  let toastTimer
+  function showToast(text) {
+    if (typeof text !== 'string' || text === '') return
+    let node = document.getElementById('float-toast')
+    if (node === null) {
+      node = document.createElement('div')
+      node.id = 'float-toast'
+      node.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translate(-50%,10px);'
+        + 'max-width:82%;padding:10px 14px;border-radius:10px;background:rgba(28,30,34,.94);color:#fff;'
+        + 'font-size:13px;line-height:20px;box-shadow:0 6px 20px rgba(0,0,0,.28);z-index:9999;'
+        + 'opacity:0;transition:opacity 180ms ease-out, transform 180ms cubic-bezier(.22,.61,.36,1);pointer-events:none;'
+      document.body.appendChild(node)
+    }
+    node.textContent = text
+    node.style.opacity = '1'
+    node.style.transform = 'translate(-50%, 0)'
+    if (toastTimer !== undefined) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => {
+      node.style.opacity = '0'
+      node.style.transform = 'translate(-50%, 6px)'
+    }, 5000)
+  }
+
+  /* ── events ──────────────────────────────────────────────────────────────── */
+  window.addEventListener('focus', () => {
+    if (document.activeElement !== input) input.focus()
+  })
+
+  /*
+   * 输入法候选框跑到屏幕左上角，根因是"合成时没有可锚定的文本框"：焦点一旦落到
+   * 日志区或 body，输入法就拿不到插入符位置。所以点日志区（没在选文字时）以及
+   * 直接敲字，都把焦点交回输入框，让候选框始终跟着光标。
+   */
+  log.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return
+    const selection = window.getSelection()
+    if (selection !== null && selection.toString() !== '') return
+    if (event.target === input) return
+    input.focus()
+  })
+  log.addEventListener('scroll', syncJump)
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      if (!sessionsMenu.hidden) {
+        closeMenu()
+        sessionsButton.focus()
+        event.preventDefault()
+        return
+      }
+      if (closeOnEscape && bridge !== undefined) {
+        bridge.postMessage({ type: 'close-request' })
+        event.preventDefault()
+        return
+      }
+    }
+    if (event.isComposing === true || event.keyCode === 229) return
+    if (document.activeElement === input) return
+    if (event.ctrlKey || event.altKey || event.metaKey) return
+    if (typeof event.key !== 'string' || event.key.length !== 1) return
+    input.focus()
+    input.value += event.key
+    event.preventDefault()
+  })
+
+  sessionsButton.addEventListener('click', (event) => {
+    event.stopPropagation()
+    if (sessionsMenu.hidden) openMenu()
+    else closeMenu()
+  })
+  sessionsButton.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown') return
+    event.preventDefault()
+    openMenu()
+  })
+  sessionSearch.addEventListener('input', renderSessionList)
+  sessionSearch.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    const first = sessionList.querySelector('.sessionRow')
+    if (first !== null) first.click()
+  })
+  // Click anywhere outside the picker — the transcript, the composer, the blank
+  // margins — closes it. Capture phase, so a handler that stops propagation in
+  // the page can never leave the panel stuck open.
+  document.addEventListener('pointerdown', (event) => {
+    if (sessionsMenu.hidden) return
+    const target = event.target
+    if (target !== null && (sessionsMenu.contains(target) || sessionsButton.contains(target))) return
+    closeMenu()
+  }, true)
+  // Losing the window (switching to another app, clicking the native title bar)
+  // closes it too, the way a desktop dropdown behaves.
+  window.addEventListener('blur', () => closeMenu())
+  document.getElementById('newSessionItem').addEventListener('click', () => {
+    void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
+  })
+  cleanBlanksItem.addEventListener('click', () => {
+    const extras = extraBlanks()
+    if (extras.length === 0) return
+    if (!cleanArmed) {
+      // First click arms, second click retires: no script dialog, nothing lost by a stray click.
+      cleanArmed = true
+      if (cleanTimer !== undefined) clearTimeout(cleanTimer)
+      cleanTimer = setTimeout(() => {
+        cleanArmed = false
+        renderSessionList()
+      }, 5000)
+      renderSessionList()
+      return
+    }
+    cleanArmed = false
+    if (cleanTimer !== undefined) clearTimeout(cleanTimer)
+    void archiveBlanks(extras)
+  })
+  document.getElementById('openMainItem').addEventListener('click', () => {
+    closeMenu()
+    void openInMainWindow()
+  })
+  document.getElementById('btn-new').addEventListener('click', () => {
+    void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
+  })
+  openMainButton.addEventListener('click', () => { void openInMainWindow() })
+
+  jumpButton.addEventListener('click', () => scrollDown(true))
+  sendButton.addEventListener('click', () => { void send() })
+  input.addEventListener('input', () => {
+    growInput()
+    syncSend()
+  })
+  input.addEventListener('keydown', (event) => {
+    if (event.isComposing === true || event.keyCode === 229) return
+    if (event.key === 'Enter' && event.shiftKey !== true) {
+      event.preventDefault()
+      void send()
+    }
+  })
+
+  /* Images: paste into the composer, drag them onto it, or pick files. */
+  input.addEventListener('paste', (event) => {
+    const clipboard = event.clipboardData
+    if (clipboard === null || clipboard === undefined) return
+    const files = []
+    for (const item of clipboard.items) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file !== null && file !== undefined) files.push(file)
+    }
+    if (files.length === 0) return
+    event.preventDefault()
+    void addImageFiles(files)
+  })
+  composer.addEventListener('dragover', (event) => {
+    event.preventDefault()
+  })
+  composer.addEventListener('drop', (event) => {
+    event.preventDefault()
+    const transfer = event.dataTransfer
+    if (transfer === null || transfer === undefined) return
+    void addImageFiles(transfer.files)
+  })
+  attachButton.addEventListener('click', () => filePicker.click())
+  filePicker.addEventListener('change', () => {
+    void addImageFiles(filePicker.files)
+    filePicker.value = ''
+  })
+
+  /** The native window's ＋ button: reopen the blank or start a fresh Session. */
+  window.__DSH_FLOAT_NEW_THREAD__ = () => {
+    void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
+    return true
+  }
+  /** Closing the window needs no page-side work any more (no owned thread). */
+  window.__DSH_FLOAT_CLEANUP__ = () => true
+
+  /* standalone-browser chrome: the native header owns these when it is present */
+  const pinButton = document.getElementById('btn-pin')
+  pinButton.addEventListener('click', () => {
+    const pinned = pinButton.getAttribute('aria-pressed') !== 'true'
+    pinButton.setAttribute('aria-pressed', pinned ? 'true' : 'false')
+    pinButton.title = pinned ? '取消置顶' : '置顶'
+  })
+  document.getElementById('btn-min').addEventListener('click', () => {})
+  document.getElementById('btn-close').addEventListener('click', () => window.close())
+
+  /* ── boot ────────────────────────────────────────────────────────────────── */
+  async function boot() {
+    growInput()
+    syncSend()
+    syncJump()
+    paintTitle()
+    await refreshSessions(true)
+    const start = initialSession !== '' ? initialSession : readLastSession()
+    if (start !== '') {
+      await selectSession(start)
+    } else if (sessions.length > 0) {
+      // Opened on its own: land on the newest real conversation, not on a
+      // leftover empty Session.
+      const rows = sessionRows()
+      const preferred = rows.find((row) => row.session.blank !== true) ?? rows[0]
+      if (preferred !== undefined) await selectSession(preferred.session.id)
+    } else {
+      empty.textContent = '还没有会话：直接输入第一个问题，就会开始一个新会话'
+      startStateLoop()
+    }
+    hostLog('page ready; initial=' + initialSession + ' session=' + sessionId + ' sessions=' + sessions.length)
+    input.focus()
+  }
+
+  void boot()
+})()
+  </script>
+</body>
+</html>
