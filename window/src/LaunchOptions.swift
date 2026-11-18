@@ -16,6 +16,9 @@ struct LaunchOptions {
     var title: String = "悬浮窗"
     var headerName: String?
     var headerValue: String?
+    /// The DSH app bundle this window belongs to (`--dsh-parent-app`), so a
+    /// "handle it in the main window" request can activate that app.
+    var parentApp: String?
     /// First-paint appearance hint carried in the page URL (`?theme=light|dark`).
     var themeHint: String?
 
@@ -34,6 +37,9 @@ struct LaunchOptions {
                 options.headerName = String(argument.dropFirst("--dsh-header-name=".count))
             } else if argument.hasPrefix("--dsh-header-value=") {
                 options.headerValue = String(argument.dropFirst("--dsh-header-value=".count))
+            } else if argument.hasPrefix("--dsh-parent-app=") {
+                let value = String(argument.dropFirst("--dsh-parent-app=".count))
+                if !value.isEmpty { options.parentApp = value }
             }
         }
         // The DSH half already decides the first paint; a `theme=` in the page URL

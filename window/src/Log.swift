@@ -22,6 +22,9 @@ enum Paths {
     static var stateFile: URL { stateDirectory.appendingPathComponent("window-state.txt") }
     static var logFile: URL { stateDirectory.appendingPathComponent("window-log.txt") }
     static var pendingCleanMarker: URL { stateDirectory.appendingPathComponent("clean-pending.txt") }
+    /// Touched by the Host when the user asks for the window again while it is
+    /// already open; the window answers by coming to the front.
+    static var showRequestFile: URL { stateDirectory.appendingPathComponent("show-request") }
 
     /// The window's WebKit cache folders (see CacheMaintenance): everything under
     /// these is regenerated on demand and holds no login state.

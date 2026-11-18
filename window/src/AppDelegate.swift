@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var titlebarMonitor: Any?
     private var titlebarInset: CGFloat = 0
     private var titleAccessory: NSTitlebarAccessoryViewController?
+    /** Last seen modification date of the Host's show-request marker. */
+    private var lastShowRequest: Date?
     private let titleLabel = NSTextField(labelWithString: "悬浮窗")
     private var statusLabel: NSTextField?
     private var closingAfterCleanup = false
@@ -379,6 +381,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         pollSettings()
         pollTheme()
         pollTitle()
+        pollShowRequest()
+    }
+
+    /**
+     * The Host touches `show-request` when the user asks for the window again
+     * while it is already open (the composer button, a second launch attempt).
+     * Answering it is what the window is for: come to the front instead of
+     * silently ignoring the request.
+     */
+    private func pollShowRequest() {
+        let stamp = WindowSettings.stamp(of: Paths.showRequestFile)
+        guard stamp != lastShowRequest else { return }
+        lastShowRequest = stamp
+        guard stamp != nil else { return }
+        Log.write("raise request: window brought forward")
+        bringToFront()
+    }
+
+    /// Show the window and make it the frontmost application's key window.
+    private func bringToFront() {
+        if !window.isVisible { window.makeKeyAndOrderFront(nil) }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeFirstResponder(webView)
     }
 
     /// The settings page writes `float-settings.json` through the Host half; the
@@ -487,6 +513,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             }
         case "close-request":
             DispatchQueue.main.async { [weak self] in self?.window.performClose(nil) }
+        case "raise-main-window":
+            DispatchQueue.main.async { [weak self] in self?.raiseMainApp() }
         case "clean-request":
             DispatchQueue.main.async { [weak self] in self?.cleanFromWindow() }
         case "stats-request":
@@ -497,6 +525,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     // MARK: - Commands
+
+    /**
+     * Bring the DSH app itself to the front. A request that can only be answered
+     * in the main window (an approval, an `ask_user_question`) is useless if the
+     * user has to hunt for that window behind everything else; the renderer
+     * cannot activate the OS app, but this process can.
+     */
+    private func raiseMainApp() {
+        guard let path = options.parentApp, !path.isEmpty else {
+            Log.write("raise main: no --dsh-parent-app given")
+            return
+        }
+        let target = URL(fileURLWithPath: path).standardizedFileURL
+        // `NSRunningApplication.activate` is silently refused for an app that is
+        // not itself frontmost (macOS 14+), so this goes through the same call
+        // `open -a` uses: it re-activates the running instance.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        Log.write("raising main window: \(target.lastPathComponent)")
+        NSWorkspace.shared.openApplication(at: target, configuration: configuration) { app, error in
+            if let error {
+                Log.write("raise main failed: \(error.localizedDescription)")
+            } else {
+                Log.write("raised main: \(app?.localizedName ?? target.lastPathComponent)")
+            }
+        }
+    }
+
+    /// Clicking the Dock icon of a running window brings it back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { bringToFront() }
+        return true
+    }
 
     private func startNewConversation() {
         guard webView != nil else { return }

@@ -104,6 +104,21 @@ const CACHE_DIRS = [
   join(homedir(), 'Library', 'WebKit', BUNDLE_ID, 'WebsiteData', 'Cache'),
 ]
 
+/**
+ * The DSH app bundle that runs this Host. The window hands the user back to it
+ * when a request can only be answered in the main window (an approval, an
+ * ask_user_question) — activating the app is a native permission the renderer
+ * does not have. Empty on a Host started outside an .app bundle.
+ */
+const PARENT_APP = (() => {
+  const marker = '/Contents/MacOS/'
+  const index = process.execPath.indexOf(marker)
+  return index > 0 ? process.execPath.slice(0, index) : ''
+})()
+
+/** Touching this file asks an already-running window to come to the front. */
+const SHOW_REQUEST = join(WINDOW_DIR, 'show-request')
+
 /** Keep in step with `Log.rotateBytes` in window/src/Log.swift (18 MB). */
 const LOG_CAP_BYTES = 18 * 1024 * 1024
 const LOG_NAME = 'window-log.txt'
@@ -395,8 +410,28 @@ export function apply(ctx) {
     return next
   }
 
-  const launch = (authUrl, pageUrl, rendererHeader) => {
-    if (child !== null && child.exitCode === null && child.signalCode === null) return false
+  /**
+   * Ask the window that is already open to come forward. The window polls this
+   * marker on the same one-second tick that reads its settings, so no IPC
+   * channel has to exist between the two processes.
+   */
+  const raiseRunningWindow = async () => {
+    try {
+      await mkdir(dirname(SHOW_REQUEST), { recursive: true })
+      await writeFile(SHOW_REQUEST, String(Date.now()), 'utf8')
+      return true
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-floating-window: raise request failed: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
+  const launch = async (authUrl, pageUrl, rendererHeader) => {
+    if (child !== null && child.exitCode === null && child.signalCode === null) {
+      // The window is already up: bringing it forward is what the button means.
+      void raiseRunningWindow()
+      return false
+    }
     const env = { ...process.env }
     // The DSH Host runs inside Electron: an inherited ELECTRON_RUN_AS_NODE would
     // turn a child Electron process into a Node one instead of a window.
@@ -409,6 +444,9 @@ export function apply(ctx) {
     if (rendererHeader !== '') {
       args.push(`--dsh-header-name=${RENDERER_HEADER}`, `--dsh-header-value=${rendererHeader}`)
     }
+    if (PARENT_APP !== '') args.push(`--dsh-parent-app=${PARENT_APP}`)
+    // A raise request left over from the previous window must not fire now.
+    try { await rm(SHOW_REQUEST, { force: true }) } catch { /* best effort */ }
     // The .app bundle's executable is spawned directly (not via `open`), so this
     // process owns the pid and the teardown below can close the window.
     child = spawn(WINDOW_BIN, args, {
@@ -802,7 +840,7 @@ export function apply(ctx) {
         if (opening !== undefined) pageUrl.searchParams.set('theme', opening)
         const forwarded = req.headers[RENDERER_HEADER]
         try {
-          const started = launch(
+          const started = await launch(
             connection.authenticatedUrl(`${origin}/`),
             pageUrl.href,
             typeof forwarded === 'string' ? forwarded : '',

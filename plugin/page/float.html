@@ -210,6 +210,15 @@
       transition: color 100ms ease-out, border-color 100ms ease-out, background-color 100ms ease-out;
     }
     .chip:hover { color: var(--text); }
+    .pendingAction {
+      flex: none;
+      color: var(--danger);
+      border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+      font-size: 12px;
+      animation: pendingPulse 1.6s ease-in-out infinite;
+    }
+    .pendingAction:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    @keyframes pendingPulse { 50% { border-color: color-mix(in srgb, var(--danger) 80%, transparent); } }
     .chip[aria-pressed='true'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 
     /* ── transcript ── */
@@ -464,6 +473,8 @@
     <textarea id="input" rows="2" placeholder="输入消息…"></textarea>
     <div class="row">
       <span class="hint" id="hint"></span>
+      <button class="chip pendingAction" id="pendingAction" type="button" hidden
+              title="这一步只能在 DSH 主窗口里确认">去主窗口确认</button>
       <button class="icon attach" id="attach" title="添加图片（也可直接粘贴或拖入）" aria-label="添加图片">
         <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
           <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/>
@@ -601,6 +612,7 @@
   const wsList = document.getElementById('wsList')
   const wsResetItem = document.getElementById('wsResetItem')
   const jumpButton = document.getElementById('jump')
+  const pendingAction = document.getElementById('pendingAction')
   const thumbs = document.getElementById('thumbs')
   const attachButton = document.getElementById('attach')
   const filePicker = document.getElementById('filePicker')
@@ -1182,7 +1194,11 @@
     const pending = Array.isArray(state.pendingInput) ? state.pendingInput : []
     const queue = Array.isArray(state.queue) ? state.queue : []
     let next = ''
-    if (pending.includes('approval') || pending.includes('question')) next = '等待你在主窗口中确认'
+    const needsUser = pending.includes('approval') || pending.includes('question')
+    // This step is answered in the DSH window, not here; offer the jump instead
+    // of a dead end.
+    pendingAction.hidden = !needsUser
+    if (needsUser) next = '等待你在主窗口中确认'
     else if (busy) next = '发送中…'
     else if (running && queue.length > 0) next = '排队中：' + queue.length + ' 条'
     else if (running) next = '正在思考…'
@@ -2069,6 +2085,11 @@
   })
   openMainButton.addEventListener('click', () => { void openInMainWindow() })
 
+  pendingAction.addEventListener('click', () => {
+    void openInMainWindow()
+    // The renderer cannot activate the OS app; the native half can.
+    if (bridge !== undefined) bridge.postMessage({ type: 'raise-main-window' })
+  })
   jumpButton.addEventListener('click', () => scrollDown(true))
   sendButton.addEventListener('click', () => { void send() })
   input.addEventListener('input', () => {
