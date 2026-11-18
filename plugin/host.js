@@ -362,9 +362,16 @@ export function apply(ctx) {
     return fromSettings === undefined ? {} : fromSettings
   }
 
-  /** Read the window's own settings file; a missing or broken file means defaults. */
+  /**
+   * Read the window's own settings file; a missing or broken file means defaults.
+   *
+   * Always reads the file: the window process writes it too (the header's pin
+   * button, the geometry it remembers), so a cached copy served here would drift
+   * from what the window actually uses and a later save from the settings page
+   * would then write the stale values back over them. It is one small file, read
+   * when a settings request arrives or a window opens.
+   */
   const loadSettings = async () => {
-    if (cachedSettings !== undefined) return cachedSettings
     try {
       const text = await readFile(SETTINGS_FILE, 'utf8')
       cachedSettings = normalizeSettings(JSON.parse(text))
