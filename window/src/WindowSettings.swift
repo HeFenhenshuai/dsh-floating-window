@@ -10,8 +10,8 @@ struct WindowSettings {
     var alwaysOnTop = true
     var rememberGeometry = true
     var opacity = 1.0               // 0.6 – 1.0
-    var defaultWidth = 620
-    var defaultHeight = 900
+    var defaultWidth = 406
+    var defaultHeight = 571
     var ephemeralByDefault = false  // retired key kept for schema compatibility
     var showSessionTitle = true
     var closeOnEscape = false

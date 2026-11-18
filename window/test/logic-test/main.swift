@@ -34,6 +34,11 @@ check(minimal.title == "悬浮窗", "default title")
 let noPage = LaunchOptions.parse(["--dsh-title=x"])
 check(noPage.pageURL == nil, "page url required")
 
+// --- shipped defaults -------------------------------------------------------
+let shipped = WindowSettings()
+check(shipped.defaultWidth == 406 && shipped.defaultHeight == 571, "factory default size is 406 x 571")
+check(shipped.appearance == "dsh" && shipped.alwaysOnTop && shipped.rememberGeometry, "factory defaults for appearance and pin")
+
 // --- settings ---------------------------------------------------------------
 let settingsURL = Paths.settingsFile
 let original = try? Data(contentsOf: settingsURL)

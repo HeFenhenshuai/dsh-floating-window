@@ -123,7 +123,7 @@ dsh plugin --profile desktop add ~/dsh-plugins/dsh-floating-window-macos
 | `alwaysOnTop` | boolean | `true` | 是否压在其他窗口之上 | 即时 |
 | `opacity` | 0.6 ~ 1.0 | `1.0` | 整体不透明度 | 即时 |
 | `rememberGeometry` | boolean | `true` | 记住位置与大小 | 下次开窗 |
-| `defaultWidth` / `defaultHeight` | 320~1600 / 260~1600 | 620 × 900 | 未记忆时的初始尺寸 | 下次开窗 |
+| `defaultWidth` / `defaultHeight` | 320~1600 / 260~1600 | 406 × 571 | 未记忆时的初始尺寸（出厂默认，可在设置页改） | 下次开窗 |
 | `closeOnEscape` | boolean | `false` | 按 Esc 关闭浮窗 | 即时 |
 | `showSessionTitle` | boolean | `true` | 标题栏显示会话名 | 即时 |
 

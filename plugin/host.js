@@ -203,8 +203,8 @@ const SETTINGS_DEFAULTS = Object.freeze({
   /** Window opacity, 0.6 – 1. */
   opacity: 1,
   /** Size used when geometry is not remembered (or nothing was saved yet). */
-  defaultWidth: 620,
-  defaultHeight: 900,
+  defaultWidth: 406,
+  defaultHeight: 571,
   /**
    * The old "burn the side thread on close" setting. Retired when the window started
    * real Sessions, so nothing here may delete one — but kept in the schema so an
