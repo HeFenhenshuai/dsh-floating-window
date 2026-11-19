@@ -10,8 +10,6 @@ Read streaming replies and continue the same conversation while you work in an I
 
 **This package** · `windows-v1.1.0`
 
-**GitHub downloads** · [Windows v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/v1.0.0/dsh-floating-window-1.0.zip) · [macOS v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/macos-v1.0.0/dsh-floating-window-macos-v1.0.0.zip)
-
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-0078d4.svg)](#system-requirements)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![DeepSeek Harness Plugin](https://img.shields.io/badge/Plugin-DSH%20Desktop-blue.svg)](#installation)
