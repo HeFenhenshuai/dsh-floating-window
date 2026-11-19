@@ -116,6 +116,7 @@ DSH 完成安装后，完全退出并重新打开 DSH Desktop，再点击聊天�
 1. **请确认是否在 DSH Desktop（桌面版）中运行**：Web 版由于缺少安全渲染器头，接口会直接拒绝开窗请求。
 2. **请确认是否已重启 DSH**：初次安装插件后必须完全退出并重启 DSH Desktop。
 3. **检查文件完整性**：打开安装插件时选择的文件夹。Windows 版应包含 `window/dsh-floating-window.exe`，macOS 版应包含 `window/dsh-floating-window.app`。`plugin/` 和 `window/` 需要放在一起。
+</details>
 
 <details>
 <summary><b>Q2: 悬浮窗打开后显示白屏或提示 forbidden？</b></summary>
