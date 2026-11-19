@@ -191,6 +191,8 @@ const SETTINGS_DEFAULTS = Object.freeze({
   /** Size used when geometry is not remembered (or nothing was saved yet). */
   defaultWidth: 620,
   defaultHeight: 900,
+  /** Empty follows the built-in default workspace. */
+  defaultWorkspaceId: '',
   /**
    * The old "burn the side thread on close" setting. Retired when the window started
    * real Sessions, so nothing here may delete one — but kept in the schema so an
@@ -231,6 +233,7 @@ function normalizeSettings(raw) {
     opacity: clampNumber(source.opacity, SETTINGS_DEFAULTS.opacity, 0.6, 1),
     defaultWidth: Math.round(clampNumber(source.defaultWidth, SETTINGS_DEFAULTS.defaultWidth, 320, 1600)),
     defaultHeight: Math.round(clampNumber(source.defaultHeight, SETTINGS_DEFAULTS.defaultHeight, 260, 1600)),
+    defaultWorkspaceId: typeof source.defaultWorkspaceId === 'string' ? source.defaultWorkspaceId : '',
     ephemeralByDefault: typeof source.ephemeralByDefault === 'boolean' ? source.ephemeralByDefault : SETTINGS_DEFAULTS.ephemeralByDefault,
     showSessionTitle: typeof source.showSessionTitle === 'boolean' ? source.showSessionTitle : SETTINGS_DEFAULTS.showSessionTitle,
     closeOnEscape: typeof source.closeOnEscape === 'boolean' ? source.closeOnEscape : SETTINGS_DEFAULTS.closeOnEscape,
@@ -362,18 +365,33 @@ export function apply(ctx) {
   }
 
   /** Write them back through a temp file, so the window never reads a half file. */
-  const saveSettings = async (patch) => {
-    const current = await loadSettings()
-    const next = normalizeSettings(Object.assign({}, current, patch))
-    const temp = `${SETTINGS_FILE}.tmp`
-    await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    await rename(temp, SETTINGS_FILE)
-    cachedSettings = next
-    return next
+  let settingsWrite = Promise.resolve()
+  const saveSettings = (patch) => {
+    const pending = settingsWrite.then(async () => {
+      const current = await loadSettings()
+      const next = normalizeSettings(Object.assign({}, current, patch))
+      const temp = `${SETTINGS_FILE}.tmp`
+      await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+      await rename(temp, SETTINGS_FILE)
+      cachedSettings = next
+      return next
+    })
+    settingsWrite = pending.catch(() => {})
+    return pending
   }
 
-  const launch = (authUrl, pageUrl, rendererHeader) => {
-    if (child !== null && child.exitCode === null && child.signalCode === null) return false
+  let showRequestFile
+  const launch = async (authUrl, pageUrl, rendererHeader) => {
+    if (child !== null && child.exitCode === null && child.signalCode === null) {
+      const running = child
+      const requestFile = showRequestFile
+      await writeFile(requestFile, '')
+      if (child !== running) await rm(requestFile, { force: true })
+      return false
+    }
+    const executable = WINDOW_EXE ?? WINDOW_BIN
+    const showRequestId = randomUUID()
+    const requestFile = join(dirname(executable), `show-request-${showRequestId}`)
     const env = { ...process.env }
     // The DSH Host runs inside Electron: an inherited ELECTRON_RUN_AS_NODE would
     // turn a child Electron process into a Node one instead of a window.
@@ -381,25 +399,35 @@ export function apply(ctx) {
     const args = [
       `--dsh-auth-url=${authUrl}`,
       `--dsh-page-url=${pageUrl}`,
+      `--dsh-host-pid=${process.pid}`,
+      `--dsh-parent-pid=${process.ppid}`,
+      `--dsh-show-request=${showRequestId}`,
       '--dsh-title=\u60ac\u6d6e\u7a97',
     ]
     if (rendererHeader !== '') {
       args.push(`--dsh-header-name=${RENDERER_HEADER}`, `--dsh-header-value=${rendererHeader}`)
     }
-    child = spawn(WINDOW_EXE ?? WINDOW_BIN, args, {
+    const windowProcess = spawn(executable, args, {
       env,
       detached: true,
       stdio: ['ignore', 'inherit', 'inherit'],
       windowsHide: false,
     })
-    child.on('exit', () => {
-      child = null
-    })
-    child.on('error', (error) => {
+    child = windowProcess
+    showRequestFile = requestFile
+    const released = () => {
+      if (child === windowProcess) {
+        child = null
+        showRequestFile = undefined
+      }
+      void rm(requestFile, { force: true }).catch(() => {})
+    }
+    windowProcess.once('exit', released)
+    windowProcess.once('error', (error) => {
       ctx.logger?.warn?.(`dsh-floating-window: window spawn failed: ${error instanceof Error ? error.message : String(error)}`)
-      child = null
+      released()
     })
-    child.unref()
+    windowProcess.unref()
     return true
   }
 
@@ -628,6 +656,7 @@ export function apply(ctx) {
         }
       }
       const baseline = await readWorkspaceBaseline()
+      const workspaces = listWorkspaceRows(baseline)
       return {
         sessions: visible.map((row) => ({
           id: row.sessionId,
@@ -638,14 +667,8 @@ export function apply(ctx) {
           cwd: typeof row.cwd === 'string' ? row.cwd : '',
           parent: typeof row.parentSessionId === 'string' ? row.parentSessionId : '',
         })),
-        workspaces: baseline !== undefined && Array.isArray(baseline.items)
-          ? baseline.items.map((workspace) => ({
-            id: String(workspace.workspaceId),
-            title: typeof workspace.title === 'string' ? workspace.title : '',
-            path: typeof workspace.path === 'string' ? workspace.path : '',
-            sessionIds: Array.isArray(workspace.sessionIds) ? workspace.sessionIds.map(String) : [],
-          }))
-          : listWorkspaceRows(),
+        workspaces,
+        ...workspaceDefaults(await loadSettings(), workspaces),
         archived: baseline !== undefined && Array.isArray(baseline.archivedSessionIds)
           ? baseline.archivedSessionIds.map(String)
           : [],
@@ -659,18 +682,68 @@ export function apply(ctx) {
   }
 
   /** The workspace registry, as labels for the picker; absent services mean no labels. */
-  const listWorkspaceRows = () => {
+  const listWorkspaceRows = (baseline) => {
+    const rows = new Map()
+    if (Array.isArray(baseline?.items)) {
+      for (const workspace of baseline.items) {
+        const id = String(workspace.workspaceId)
+        rows.set(id, {
+          id,
+          title: typeof workspace.title === 'string' ? workspace.title : '',
+          path: typeof workspace.path === 'string' ? workspace.path : '',
+          sessionIds: Array.isArray(workspace.sessionIds) ? workspace.sessionIds.map(String) : [],
+        })
+      }
+    }
     try {
       const registry = ctx.get('workspaceRegistry')
-      if (registry === undefined || typeof registry.list !== 'function') return []
-      return registry.list().map((workspace) => ({
-        id: String(workspace.id),
-        title: typeof workspace.title === 'string' ? workspace.title : '',
-        path: typeof workspace.path === 'string' ? workspace.path : '',
-      }))
+      if (typeof registry?.list === 'function') {
+        for (const workspace of registry.list()) {
+          const id = String(workspace.id)
+          if (rows.has(id)) continue
+          rows.set(id, {
+            id,
+            title: typeof workspace.title === 'string' ? workspace.title : '',
+            path: typeof workspace.path === 'string' ? workspace.path : '',
+          })
+        }
+      }
     } catch (error) {
-      return []
+      // The workspace controller may still have provided the sidebar rows.
     }
+    return Array.from(rows.values())
+  }
+
+  const workspaceDefaults = (settings, workspaces) => {
+    const builtin = workspaces.find((row) => row.id === 'default-workspace')
+      ?? workspaces.find((row) => row.title === 'default-workspace' || row.title === '默认工作区')
+      ?? workspaces.find((row) => row.path.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() === 'default-workspace')
+    const selected = workspaces.find((row) => row.id === settings.defaultWorkspaceId)
+    return {
+      builtinWorkspaceId: builtin?.id ?? '',
+      defaultWorkspaceId: selected?.id ?? builtin?.id ?? '',
+    }
+  }
+
+  const settingsWorkspaceRows = async () => {
+    const rows = listWorkspaceRows()
+    return workspaceDefaults(SETTINGS_DEFAULTS, rows).builtinWorkspaceId !== ''
+      ? rows
+      : listWorkspaceRows(await readWorkspaceBaseline())
+  }
+
+  const resolveWorkspaceId = async (directory) => {
+    if (typeof directory !== 'string' || directory === '') return ''
+    try {
+      const registry = ctx.get('workspaceRegistry')
+      if (typeof registry?.resolveByPath === 'function') {
+        const workspace = await registry.resolveByPath(directory)
+        return String(workspace?.id ?? '')
+      }
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-floating-window: workspace lookup failed: ${messageOf(error)}`)
+    }
+    return ''
   }
 
   /** Validate one JSON request body field as a Session identity. */
@@ -737,7 +810,7 @@ export function apply(ctx) {
         if (opening !== undefined) pageUrl.searchParams.set('theme', opening)
         const forwarded = req.headers[RENDERER_HEADER]
         try {
-          const started = launch(
+          const started = await launch(
             connection.authenticatedUrl(`${origin}/`),
             pageUrl.href,
             typeof forwarded === 'string' ? forwarded : '',
@@ -754,7 +827,11 @@ export function apply(ctx) {
       path: SETTINGS_ROUTE,
       handler: async (req, res) => {
         if (req.method === 'GET') {
-          sendJson(res, 200, { ok: true, value: await loadSettings(), defaults: SETTINGS_DEFAULTS })
+          // The native file watcher can request this while the write is finishing.
+          await settingsWrite
+          const value = await loadSettings()
+          const workspaces = await settingsWorkspaceRows()
+          sendJson(res, 200, { ok: true, value, defaults: SETTINGS_DEFAULTS, workspaces, ...workspaceDefaults(value, workspaces) })
           return
         }
         if (req.method !== 'POST') {
@@ -762,7 +839,7 @@ export function apply(ctx) {
           return
         }
         const body = await readJsonBody(req)
-        if (body === undefined) {
+        if (body === undefined || body === null) {
           sendJson(res, 400, { ok: false, error: 'invalid body' })
           return
         }
@@ -779,6 +856,13 @@ export function apply(ctx) {
         if (touched === 0) {
           sendJson(res, 400, { ok: false, error: 'no known setting in body' })
           return
+        }
+        if (patch.defaultWorkspaceId !== undefined && patch.defaultWorkspaceId !== '') {
+          const workspaces = await settingsWorkspaceRows()
+          if (!workspaces.some((row) => row.id === patch.defaultWorkspaceId)) {
+            sendJson(res, 400, { ok: false, error: '所选工作区不可用，请刷新后重试' })
+            return
+          }
         }
         try {
           const saved = await saveSettings(patch)
@@ -1078,15 +1162,17 @@ export function apply(ctx) {
           return
         }
         const body = await readJsonBody(req)
-        const request = {}
         const workspaceId = body !== undefined && typeof body.workspaceId === 'string' && body.workspaceId !== ''
           ? body.workspaceId
           : undefined
         const cwd = body !== undefined && typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined
-        if (workspaceId !== undefined) request.workspaceId = workspaceId
-        else if (cwd !== undefined) request.cwd = cwd
         const lease = callBudget(20000)
         try {
+          const request = {}
+          const target = workspaceId ?? (workspaceDefaults(await loadSettings(), await settingsWorkspaceRows()).defaultWorkspaceId
+            || await resolveWorkspaceId(cwd))
+          if (target !== '') request.workspaceId = target
+          else if (cwd !== undefined) request.cwd = cwd
           const value = await sessionController().create(request)
           sendJson(res, 200, { ok: true, value: value ?? null })
         } catch (error) {

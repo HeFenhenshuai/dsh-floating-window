@@ -563,11 +563,19 @@ window.__ModuleLoader__.load({
     /** The settings page the section slot renders. */
     function FloatSettingsPanel() {
       const [state, setState] = React.useState({ status: 'loading', settings: null, defaults: undefined, note: '' })
+      const [editingWorkspace, setEditingWorkspace] = React.useState(false)
 
       const load = React.useCallback(() => {
         setState((current) => Object.assign({}, current, { status: 'loading', note: '' }))
         settingsApi('').then(
-          (body) => setState({ status: 'ready', settings: body.value, defaults: body.defaults, note: '' }),
+          (body) => setState({
+            status: 'ready',
+            settings: body.value,
+            defaults: body.defaults,
+            workspaces: Array.isArray(body.workspaces) ? body.workspaces : [],
+            builtinWorkspaceId: body.builtinWorkspaceId,
+            note: '',
+          }),
           (error) => setState({
             status: error !== null && error !== undefined && error.unavailable === true ? 'unavailable' : 'error',
             settings: null,
@@ -588,7 +596,7 @@ window.__ModuleLoader__.load({
           // failed write is reported underneath rather than bouncing the control.
           // `quiet` is the drag path — it must not make the note flicker per step.
           return Object.assign({}, current, {
-            settings: Object.assign({}, current.settings, patch),
+            settings: patch.defaultWorkspaceId === undefined ? Object.assign({}, current.settings, patch) : current.settings,
             status: 'ready',
             note: quiet === true ? current.note : '保存中…',
           })
@@ -672,6 +680,10 @@ window.__ModuleLoader__.load({
       // What the window is actually using right now: the forced value when one is
       // set, otherwise DSH's own resolved scheme (the window follows it).
       const currentTheme = THEME_NAMES[lastTheme.resolved] ?? '未知'
+      const otherWorkspaces = state.workspaces.filter((row) => row.id !== state.builtinWorkspaceId)
+      const chosenWorkspace = otherWorkspaces.find((row) => row.id === settings.defaultWorkspaceId)
+      const workspaceName = (row) => row.title || row.path || row.id
+      const workspaceLabel = chosenWorkspace === undefined ? '默认工作区' : workspaceName(chosenWorkspace)
       const appearanceHint = settings.appearance === 'dsh'
         ? `跟随 DSH 的浅色 / 深色（当前：${currentTheme}）`
         : settings.appearance === 'system'
@@ -751,6 +763,29 @@ window.__ModuleLoader__.load({
         ]),
         h('div', { key: 'behaviour', style: S.card }, [
           h('div', { key: 'h', style: S.cardTitle }, '行为'),
+          h(Row, { key: 'workspace', label: '新对话默认分区', hint: '当前使用「' + workspaceLabel + '」' },
+            editingWorkspace ? [
+              h('select', {
+                key: 'select',
+                style: Object.assign({}, S.input, { width: 'auto', maxWidth: '180px' }),
+                'aria-label': '新对话默认分区',
+                value: chosenWorkspace?.id ?? '',
+                onChange: (event) => {
+                  save({ defaultWorkspaceId: event.target.value })
+                  setEditingWorkspace(false)
+                },
+              }, [
+                h('option', { key: 'builtin', value: '' }, '默认工作区'),
+                ...otherWorkspaces.map((row) => h('option', { key: row.id, value: row.id }, workspaceName(row))),
+              ]),
+              h(Button, { key: 'cancel', size: 'sm', variant: 'outline', onClick: () => setEditingWorkspace(false) }, '取消'),
+            ] : h(Button, {
+              size: 'sm',
+              variant: 'outline',
+              disabled: otherWorkspaces.length === 0,
+              onClick: () => setEditingWorkspace(true),
+            }, '更改'),
+          ),
           h(ToggleRow, {
             key: 'title',
             label: '标题栏显示会话名称',

@@ -8,7 +8,9 @@
 
 Read streaming replies and continue the same conversation while you work in an IDE, terminal, or browser.
 
-**Download** · [Windows v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/v1.0.0/dsh-floating-window-1.0.zip) · [macOS v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/macos-v1.0.0/dsh-floating-window-macos-v1.0.0.zip)
+**This package** · `windows-v1.1.0`
+
+**GitHub downloads** · [Windows v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/v1.0.0/dsh-floating-window-1.0.zip) · [macOS v1.0.0 (ZIP)](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/macos-v1.0.0/dsh-floating-window-macos-v1.0.0.zip)
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-0078d4.svg)](#system-requirements)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
@@ -28,6 +30,15 @@ Read streaming replies and continue the same conversation while you work in an I
 
 ---
 
+## windows-v1.1.0 release notes
+
+- **Resize from any edge or corner.** Drag either side to change the width, the top or bottom edge to change the height, or a corner to change both. The resize cursor appears when you hover over the window edge.
+- **Choose a workspace for new chats.** New chats start in DSH’s built-in Default Workspace. Change it beside **＋** in the floating window or under **DSH Settings → 悬浮窗 → 行为 → 新对话默认分区**. Both controls use the same saved preference.
+- **Bring back an open floating window.** Click **浮窗** beside the main chat input again to restore or raise the existing window with its current conversation.
+- **Handle approvals and questions in DSH.** When the current conversation needs an approval or an answer, click **去主窗口确认** to open that same conversation in the main window.
+
+---
+
 ## Why use a floating window?
 
 When you switch from DeepSeek Harness (DSH) Desktop to an editor or browser, the main chat window can get buried. The floating window runs in its own native process, so you can keep a reply in view or ask a follow-up even when DSH is minimized.
@@ -36,7 +47,7 @@ The plugin works with your existing DSH sessions. You can read earlier messages,
 
 ## Features
 
-- **Window controls.** Drag the title bar to move the window or drag a corner to resize it. Use the title bar to start a session, pin or unpin the window, clear the cache, minimize, or close. The window remembers its opacity and can restore its size and position. You can also enable `Esc` to close it.
+- **Window controls.** Drag a blank area of the title bar to move the window. On Windows, drag any edge or corner to resize it. Use the title bar to start a session, pin or unpin the window, clear the cache, minimize, or close. The window remembers its opacity and can restore its size and position. You can also enable `Esc` to close it.
 - **Session switching.** Open the session picker in the upper-left corner to search your history and switch conversations. Use the **Main window (主窗口)** button to continue the current session in DSH Desktop.
 - **Images and streaming replies.** Drop, paste, or select up to four images to attach to a message. Images appear in the transcript as replies stream in. Long reasoning and tool-call sections collapse to a single line.
 - **Appearance.** Follow the DSH theme, follow the system theme, or choose light or dark mode. When following DSH, the floating window and its title bar update when you change the DSH theme. Window opacity is adjustable from 60% to 100%.
@@ -52,6 +63,12 @@ The plugin works with your existing DSH sessions. You can read earlier messages,
 Enable the DSH conversation plugin (`@deepseek-ai/dsh-client-ui-conversation`) on either platform so the floating-window button can appear beside the chat input.
 
 ## Installation
+
+### Install from the Windows ZIP
+
+1. Extract `dsh-floating-window-windows-v1.1.0.zip`.
+2. On the DSH Plugins page, add the local plugin and choose the extracted `dsh-floating-window-windows` folder that contains `package.json`.
+3. Fully quit and reopen DSH Desktop, then click **浮窗** beside the chat input.
 
 ### Ask DSH to install from GitHub
 
@@ -89,6 +106,7 @@ Open **DSH Settings → 悬浮窗** to change these options.
 | Opacity (`opacity`) | 0.6–1.0 | `1.0` | Adjust the opacity of the whole window | Immediately |
 | Remember size and position (`rememberGeometry`) | Boolean | `true` | Restore the previous window dimensions and screen position | Next time the window opens |
 | Default size (`defaultWidth`, `defaultHeight`) | Width 320–1600 px, height 260–1600 px | Windows 620 × 900, macOS 406 × 571 | Set the initial size when saved dimensions are unavailable or disabled | Next time the window opens |
+| Default workspace for new chats (Windows, `defaultWorkspaceId`) | Workspace | Default Workspace | Choose where new floating-window chats are created | When saved |
 | Close with Esc (`closeOnEscape`) | Boolean | `false` | Close the floating window when it has focus and you press `Esc` | Immediately |
 
 ## FAQ

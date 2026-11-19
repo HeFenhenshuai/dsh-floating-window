@@ -103,6 +103,7 @@
 
     /* ── conversation bar (session picker + new chat + hand-off) ── */
     .threadbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px 4px; }
+    #btn-main { flex: none; white-space: nowrap; }
     .menu { position: relative; min-width: 0; max-width: 70%; }
     #sessionsBtn {
       display: block;
@@ -115,6 +116,16 @@
       font-weight: 600;
     }
     #sessionsBtn:hover { color: var(--text); }
+    .workspacePicker {
+      min-width: 0; max-width: 40%; padding: 4px 6px;
+      font: inherit; color: var(--text-2); background: var(--bg);
+      border: 1px solid var(--hairline); border-radius: 999px;
+    }
+    .pendingAction {
+      align-self: flex-end; flex: none; margin: 3px 14px;
+      color: var(--danger); border-color: var(--danger);
+    }
+    .pendingAction:hover { color: var(--danger); }
     .menuPanel {
       position: absolute;
       top: calc(100% + 6px);
@@ -419,9 +430,12 @@
       </div>
     </div>
     <button class="icon" id="btn-new" title="新对话">＋</button>
+    <select class="workspacePicker" id="newWorkspace" aria-label="新对话分区" title="新对话分区" hidden></select>
     <span class="grow"></span>
     <button class="chip" id="btn-main" title="在主窗口中打开这个会话">主窗口</button>
   </div>
+
+  <button class="chip pendingAction" id="pendingAction" type="button" hidden>去主窗口确认</button>
 
   <div class="logWrap">
     <main class="log" id="log">
@@ -499,6 +513,7 @@
       if (data.type === 'theme') useTheme(data.theme)
       else if (data.type === 'settings') applyWindowSettings(data.settings)
       else if (data.type === 'clean-result') showToast(data.text)
+      else if (data.type === 'main-window-attention') showToast(data.text)
     })
     // The page script runs before navigation completes: ask for theme + settings
     // so the first paint is already right and the native header is not stale.
@@ -566,6 +581,9 @@
   const sessionSearch = document.getElementById('sessionSearch')
   const cleanBlanksItem = document.getElementById('cleanBlanksItem')
   const openMainButton = document.getElementById('btn-main')
+  const newWorkspace = document.getElementById('newWorkspace')
+  const newSessionItem = document.getElementById('newSessionItem')
+  const pendingAction = document.getElementById('pendingAction')
   const jumpButton = document.getElementById('jump')
   const thumbs = document.getElementById('thumbs')
   const attachButton = document.getElementById('attach')
@@ -587,6 +605,11 @@
   /** The rows the picker shows, newest first. */
   let sessions = []
   let workspaces = []
+  let builtinWorkspaceId = ''
+  let defaultWorkspaceId = ''
+  let workspaceUpdate
+  let creatingSession
+  let openingMainWindow = false
   /** The DSH window's own archive/pin sets, so the picker agrees with it. */
   let archivedIds = []
   let pinnedIds = []
@@ -687,16 +710,8 @@
   /** The workspace a Session belongs to, when the registry knows it. */
   function workspaceLabelOf(cwd) {
     if (typeof cwd !== 'string' || cwd === '') return ''
-    let best
-    for (const workspace of workspaces) {
-      const path = typeof workspace.path === 'string' ? workspace.path : ''
-      if (path === '') continue
-      if (cwd === path || cwd.startsWith(path + '\\') || cwd.startsWith(path + '/')) {
-        if (best === undefined || path.length > best.path.length) best = workspace
-      }
-    }
-    if (best !== undefined) return best.title !== '' ? best.title : baseName(best.path)
-    return baseName(cwd)
+    const id = workspaceIdFor(cwd)
+    return workspaceLabel(workspaces.find((row) => row.id === id)) || baseName(cwd)
   }
 
   function labelOf(session) {
@@ -1131,13 +1146,18 @@
   }
 
   function applyState(state) {
-    if (state === null || typeof state !== 'object') return
+    if (state === null || typeof state !== 'object') {
+      pendingAction.hidden = true
+      return
+    }
     const running = state.running === true
     setPulse(running ? 'running' : 'idle')
     const pending = Array.isArray(state.pendingInput) ? state.pendingInput : []
+    const needsConfirmation = pending.includes('approval') || pending.includes('question')
+    pendingAction.hidden = !needsConfirmation
     const queue = Array.isArray(state.queue) ? state.queue : []
     let next = ''
-    if (pending.includes('approval') || pending.includes('question')) next = '等待你在主窗口中确认'
+    if (needsConfirmation) next = '等待你在主窗口中确认'
     else if (busy) next = '发送中…'
     else if (running && queue.length > 0) next = '排队中：' + queue.length + ' 条'
     else if (running) next = '正在思考…'
@@ -1179,21 +1199,26 @@
 
   /* ── the picker's rows ─────────────────────────────────────────────────────
    * Rows follow the DSH window: its workspace order, its pins first, and its
-   * archive set. Empty Sessions are folded into one "新对话" row — the client
+   * archive set. Each workspace shows one reusable empty Session — the client
    * mints a reusable blank for every new conversation, so an abandoned one must
    * not become its own permanent list entry.
    */
   const isBlank = (session) => session !== null && session !== undefined && session.blank === true
 
+  function workspacePath(path) {
+    return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  }
+
   /** The workspace a directory belongs to, longest matching path wins. */
   function workspaceIdFor(cwd) {
     if (typeof cwd !== 'string' || cwd === '') return ''
+    const directory = workspacePath(cwd)
     let best = ''
     let bestLength = -1
     for (const workspace of workspaces) {
-      const path = typeof workspace.path === 'string' ? workspace.path : ''
+      const path = typeof workspace.path === 'string' ? workspacePath(workspace.path) : ''
       if (path === '') continue
-      if (cwd === path || cwd.startsWith(path + '\\') || cwd.startsWith(path + '/')) {
+      if (directory === path || directory.startsWith(path + '/')) {
         if (path.length > bestLength) {
           best = workspace.id
           bestLength = path.length
@@ -1209,25 +1234,66 @@
       && workspace.sessionIds.includes(id)
   }
 
-  /** The one empty Session the picker shows: the current blank, else the newest. */
-  function blankKeeper() {
+  function workspaceLabel(workspace) {
+    if (workspace?.id === builtinWorkspaceId) return '默认工作区'
+    return workspace?.title || baseName(workspace?.path ?? '') || workspace?.id || ''
+  }
+
+  function workspaceForNewSession() {
+    return defaultWorkspaceId || workspaceIdFor(sessionCwd)
+  }
+
+  function syncWorkspacePicker() {
+    newWorkspace.replaceChildren(new Option('默认工作区', ''))
+    for (const workspace of workspaces) {
+      if (workspace.id === builtinWorkspaceId) continue
+      newWorkspace.add(new Option(workspaceLabel(workspace), workspace.id))
+    }
+    newWorkspace.value = defaultWorkspaceId === builtinWorkspaceId ? '' : defaultWorkspaceId
+    newWorkspace.hidden = workspaces.length === 0
+    const target = workspaceLabel(workspaces.find((row) => row.id === workspaceForNewSession()))
+    newSessionItem.textContent = target === '' ? '＋ 新对话' : '＋ 新对话 · ' + truncate(target, 14)
+  }
+
+  function applyWorkspacePreference(settings) {
+    const selected = settings?.defaultWorkspaceId
+    defaultWorkspaceId = workspaces.some((row) => row.id === selected) ? selected : builtinWorkspaceId
+    syncWorkspacePicker()
+  }
+
+  async function refreshWorkspacePreference() {
+    if (workspaceUpdate !== undefined) return workspaceUpdate
+    try {
+      const settings = await api('/dsh-floating-window/settings')
+      if (workspaceUpdate === undefined) applyWorkspacePreference(settings)
+    } catch (error) {
+      // The last loaded preference still works if the Host is busy.
+    }
+  }
+
+  /** Reuse the current empty Session in this workspace, or the newest empty one. */
+  function blankKeeper(workspaceId) {
     const archived = new Set(archivedIds)
     const current = sessions.filter((session) => session.id === sessionId)[0]
-    if (isBlank(current)) return current.id
-    // Only a blank the DSH window itself accounts for in this workspace may be
-    // reopened; an abandoned orphan blank is cleanup material, not a "新对话".
-    const workspaceId = workspaceIdFor(current !== undefined ? current.cwd : '')
+    const workspace = workspaces.find((row) => row.id === workspaceId)
     let best
     for (const session of sessions) {
       if (!isBlank(session) || archived.has(session.id)) continue
-      if (workspaceId !== '') {
-        if (!isWorkspaceMember(workspaceId, session.id)) continue
-      } else if (current !== undefined && session.cwd !== current.cwd) {
-        continue
-      }
+      const sameWorkspace = Array.isArray(workspace?.sessionIds)
+        ? isWorkspaceMember(workspaceId, session.id)
+        : workspaceId !== '' ? workspaceIdFor(session.cwd) === workspaceId : workspacePath(session.cwd) === workspacePath(sessionCwd)
+      if (!sameWorkspace) continue
+      if (session === current) return current.id
       if (best === undefined || session.updatedAt > best.updatedAt) best = session
     }
     return best !== undefined ? best.id : ''
+  }
+
+  function visibleBlanks() {
+    const keepers = new Set(workspaces.map((workspace) => blankKeeper(workspace.id)))
+    keepers.add(sessionId)
+    if (workspaceIdFor(sessionCwd) === '') keepers.add(blankKeeper(''))
+    return keepers
   }
 
   /** Visible rows in the DSH window's order. */
@@ -1235,13 +1301,13 @@
     const byId = new Map(sessions.map((session) => [session.id, session]))
     const archived = new Set(archivedIds)
     const pinned = new Set(pinnedIds)
-    const keeper = blankKeeper()
+    const keepers = visibleBlanks()
     const rows = []
     const placed = new Set()
     const add = (session, where) => {
       if (session === undefined || session === null || placed.has(session.id)) return
       if (archived.has(session.id)) return
-      if (isBlank(session) && session.id !== keeper) return
+      if (isBlank(session) && !keepers.has(session.id)) return
       placed.add(session.id)
       rows.push({ session, where, pinned: pinned.has(session.id) })
     }
@@ -1260,9 +1326,9 @@
   /** Empty Sessions the picker folded away — the ones a cleanup may retire. */
   function extraBlanks() {
     const archived = new Set(archivedIds)
-    const keeper = blankKeeper()
+    const keepers = visibleBlanks()
     return sessions.filter((session) => isBlank(session) && !archived.has(session.id)
-      && session.id !== keeper && session.id !== sessionId)
+      && !keepers.has(session.id))
   }
 
   function renderSessionList() {
@@ -1330,16 +1396,19 @@
       const value = await api('/dsh-floating-window/sessions')
       sessions = Array.isArray(value.sessions) ? value.sessions : []
       workspaces = Array.isArray(value.workspaces) ? value.workspaces : []
+      builtinWorkspaceId = workspaces.some((row) => row.id === value.builtinWorkspaceId) ? value.builtinWorkspaceId : ''
+      defaultWorkspaceId = workspaces.some((row) => row.id === value.defaultWorkspaceId) ? value.defaultWorkspaceId : ''
       archivedIds = Array.isArray(value.archived) ? value.archived.map(String) : []
       pinnedIds = Array.isArray(value.pinned) ? value.pinned.map(String) : []
       sessionsAt = Date.now()
       renderSessionList()
       hostLog('sessions: ' + sessions.length + ' listed: ' + sessionRows().length
-        + ' extraBlanks: ' + extraBlanks().length + ' keeper: ' + (blankKeeper() || 'none'))
+        + ' extraBlanks: ' + extraBlanks().length)
       if (sessionId !== '') {
         const known = sessions.filter((session) => session.id === sessionId)[0]
         if (known !== undefined) applySessionMeta(known)
       }
+      syncWorkspacePicker()
     } catch (error) {
       setHint('会话列表读取失败：' + message(error), true)
     }
@@ -1398,6 +1467,7 @@
       return
     }
     closeFollow()
+    pendingAction.hidden = true
     sessionId = id
     sessionTitle = ''
     sessionCwd = ''
@@ -1408,6 +1478,7 @@
     setHint('正在载入会话…', false)
     const known = sessions.filter((session) => session.id === id)[0]
     if (known !== undefined) applySessionMeta(known)
+    syncWorkspacePicker()
     const live = await startFollow(id)
     if (!live) {
       hostLog('follow unavailable; falling back to polling')
@@ -1532,19 +1603,22 @@
   }
 
   /* ── sending ─────────────────────────────────────────────────────────────── */
-  async function createSession() {
-    // Creating inside the workspace is what puts the new conversation in the
-    // DSH window's list too; a bare cwd would leave it an orphan.
-    const workspaceId = workspaceIdFor(sessionCwd)
-    const payload = workspaceId !== ''
-      ? { workspaceId }
-      : sessionCwd === '' ? {} : { cwd: sessionCwd }
-    const value = await api('/dsh-floating-window/session/new', payload)
-    const id = value !== null && value !== undefined && typeof value.sessionId === 'string' ? value.sessionId : ''
-    if (id === '') throw new Error('新会话创建失败')
-    sessionsAt = 0
-    await selectSession(id)
-    return id
+  function createSession() {
+    if (creatingSession !== undefined) return creatingSession
+    creatingSession = Promise.resolve(workspaceUpdate).then(() => {
+      const workspaceId = workspaceForNewSession()
+      const payload = workspaceId !== ''
+        ? { workspaceId }
+        : sessionCwd === '' ? {} : { cwd: sessionCwd }
+      return api('/dsh-floating-window/session/new', payload)
+    }).then(async (value) => {
+      const id = typeof value?.sessionId === 'string' ? value.sessionId : ''
+      if (id === '') throw new Error('新会话创建失败')
+      sessionsAt = 0
+      await selectSession(id)
+      return id
+    }).finally(() => { creatingSession = undefined })
+    return creatingSession
   }
 
   /**
@@ -1553,19 +1627,21 @@
    * new Session per click is exactly how abandoned "新对话" rows pile up.
    */
   async function newConversation() {
-    const keeper = blankKeeper()
+    closeMenu()
+    if (creatingSession !== undefined) return creatingSession
+    await refreshSessions(false)
+    await refreshWorkspacePreference()
+    if (creatingSession !== undefined) return creatingSession
+    const keeper = blankKeeper(workspaceForNewSession())
     if (keeper !== '' && keeper !== sessionId) {
-      closeMenu()
       await selectSession(keeper)
       setHint('', false)
       return
     }
     if (keeper !== '' && keeper === sessionId) {
-      closeMenu()
       input.focus()
       return
     }
-    closeMenu()
     await createSession()
   }
 
@@ -1643,17 +1719,24 @@
   }
 
   /* ── hand-off to the DSH window ──────────────────────────────────────────── */
-  async function openInMainWindow() {
+  async function openInMainWindow(raiseMain = false) {
+    if (openingMainWindow) return
     if (sessionId === '') {
       setHint('先选择一个会话', false)
       return
     }
     const id = sessionId
+    openingMainWindow = true
+    pendingAction.disabled = true
     try {
       await api('/dsh-floating-window/focus', { sessionId: id })
-      setHint('已在 DSH 主窗口中打开', false)
+      if (raiseMain && bridge !== undefined) bridge.postMessage('raise-main-window')
+      if (id === sessionId) setHint('已请求在 DSH 主窗口中打开', false)
     } catch (error) {
-      setHint('主窗口打开失败：' + message(error), true)
+      if (id === sessionId) setHint('主窗口打开失败：' + message(error), true)
+    } finally {
+      openingMainWindow = false
+      pendingAction.disabled = false
     }
   }
 
@@ -1757,6 +1840,7 @@
       paintTitle()
     }
     if (typeof settings.closeOnEscape === 'boolean') closeOnEscape = settings.closeOnEscape
+    if (workspaces.length > 0) void refreshWorkspacePreference()
   }
 
   /* ── ephemeral toast (cache cleanup results) ─────────────────────────────── */
@@ -1786,6 +1870,7 @@
   /* ── events ──────────────────────────────────────────────────────────────── */
   window.addEventListener('focus', () => {
     if (document.activeElement !== input) input.focus()
+    if (workspaces.length > 0) void refreshWorkspacePreference()
   })
 
   /*
@@ -1803,6 +1888,7 @@
   log.addEventListener('scroll', syncJump)
 
   document.addEventListener('keydown', (event) => {
+    if (event.target === newWorkspace) return
     if (event.key === 'Escape') {
       if (!sessionsMenu.hidden) {
         closeMenu()
@@ -1854,7 +1940,19 @@
   // Losing the window (switching to another app, clicking the native title bar)
   // closes it too, the way a desktop dropdown behaves.
   window.addEventListener('blur', () => closeMenu())
-  document.getElementById('newSessionItem').addEventListener('click', () => {
+  newWorkspace.addEventListener('change', () => {
+    newWorkspace.disabled = true
+    workspaceUpdate = api('/dsh-floating-window/settings', { defaultWorkspaceId: newWorkspace.value })
+      .then(applyWorkspacePreference, (error) => {
+        syncWorkspacePicker()
+        setHint('分区保存失败：' + message(error), true)
+      })
+      .finally(() => {
+        workspaceUpdate = undefined
+        newWorkspace.disabled = false
+      })
+  })
+  newSessionItem.addEventListener('click', () => {
     void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
   })
   cleanBlanksItem.addEventListener('click', () => {
@@ -1883,6 +1981,7 @@
     void newConversation().catch((error) => setHint('新会话创建失败：' + message(error), true))
   })
   openMainButton.addEventListener('click', () => { void openInMainWindow() })
+  pendingAction.addEventListener('click', () => { void openInMainWindow(true) })
 
   jumpButton.addEventListener('click', () => scrollDown(true))
   sendButton.addEventListener('click', () => { void send() })

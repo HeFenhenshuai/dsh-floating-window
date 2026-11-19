@@ -11,6 +11,7 @@
 // null-conditional operators, no expression-bodied members.
 
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -22,6 +23,10 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
+
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("windows-v1.1.0")]
 
 namespace DshFloatChat
 {
@@ -220,6 +225,9 @@ namespace DshFloatChat
             string title = "\u60ac\u6d6e\u7a97";
             string headerName = null;
             string headerValue = null;
+            int hostPid = 0;
+            int parentPid = 0;
+            Guid showRequestId = Guid.Empty;
 
             AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e)
             {
@@ -268,6 +276,18 @@ namespace DshFloatChat
                 {
                     headerValue = arg.Substring("--dsh-header-value=".Length);
                 }
+                else if (arg.StartsWith("--dsh-host-pid=", StringComparison.Ordinal))
+                {
+                    int.TryParse(arg.Substring("--dsh-host-pid=".Length), out hostPid);
+                }
+                else if (arg.StartsWith("--dsh-parent-pid=", StringComparison.Ordinal))
+                {
+                    int.TryParse(arg.Substring("--dsh-parent-pid=".Length), out parentPid);
+                }
+                else if (arg.StartsWith("--dsh-show-request=", StringComparison.Ordinal))
+                {
+                    Guid.TryParseExact(arg.Substring("--dsh-show-request=".Length), "D", out showRequestId);
+                }
             }
 
             if (string.IsNullOrEmpty(pageUrl)) return;
@@ -283,7 +303,7 @@ namespace DshFloatChat
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new FloatWindowForm(authUrl, pageUrl, title, headerName, headerValue, theme));
+            Application.Run(new FloatWindowForm(authUrl, pageUrl, title, headerName, headerValue, theme, hostPid, parentPid, showRequestId));
             // 窗口关掉、浏览器进程退出之后，欠下的缓存清理这时才删得动。
             System.Threading.Thread.Sleep(600);
             CleanPendingCache();
@@ -312,8 +332,36 @@ namespace DshFloatChat
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr hwnd, int command);
+
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindowEx(ref WindowFlashInfo info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowFlashInfo
+        {
+            internal uint Size;
+            internal IntPtr Window;
+            internal uint Flags;
+            internal uint Count;
+            internal uint Timeout;
+        }
+
+        private const int SW_RESTORE = 9;
+        private const uint FLASHW_TRAY = 2;
+
         private readonly string authUrl;
         private readonly string pageUrl;
+        private readonly int hostPid;
+        private readonly int parentPid;
+        private readonly string showRequestFile;
         private readonly string rendererHeaderName;
         private readonly string rendererHeaderValue;
         private readonly string statePath;
@@ -351,8 +399,7 @@ namespace DshFloatChat
         private Label captionLabel;
         private Panel headerPanel;
         private Panel controlsPanel;
-        private Panel gripRight;
-        private Panel gripLeft;
+        private readonly ResizeGrip[] resizeGrips = new ResizeGrip[8];
         /** 当前生效的调色板：窗口里每一个有色像素都从这里取。 */
         private ThemePalette palette;
         /** 打开时 URL 带来的外观；只在读不到 DSH 设置文件时当兜底。 */
@@ -367,13 +414,12 @@ namespace DshFloatChat
         private bool lightTheme;
         private Color themePageFill;
         private Color themeHeaderFill;
-        private bool resizing;
-        private bool resizeFromLeft;
-        private bool resizeFromTop;
-        private const int GRIP_SIZE = 58;
+        private ResizeGrip activeResizeGrip;
+        private const int CORNER_GRIP_SIZE = 58;
+        private const int EDGE_GRIP_THICKNESS = 6;
         private Point resizeOrigin = Point.Empty;
-        private Point boundsStart = Point.Empty;
-        private Size resizeStart = Size.Empty;
+        private Rectangle resizeStart;
+        private Rectangle resizeWorkingArea;
         private bool started;
         private bool closingAfterCleanup;
 
@@ -394,11 +440,6 @@ namespace DshFloatChat
             internal Color ButtonHover;
             internal Color ButtonDown;
             internal Color Danger;          // 状态行报错
-            internal Color GripIdleHeader;  // 缩放手柄：压在标题栏上的那部分
-            internal Color GripHoverHeader;
-            internal Color GripIdlePage;    // 缩放手柄：压在页面上的那部分
-            internal Color GripHoverPage;
-            internal Color GripArc;         // 手柄的 L 形括号
         }
 
         /** 深色档：与原观感逐色一致。 */
@@ -415,11 +456,6 @@ namespace DshFloatChat
             palette.ButtonHover = Color.FromArgb(52, 52, 58);
             palette.ButtonDown = Color.FromArgb(64, 64, 70);
             palette.Danger = Color.FromArgb(229, 83, 75);
-            palette.GripIdleHeader = Color.FromArgb(30, 30, 33);
-            palette.GripHoverHeader = Color.FromArgb(44, 44, 51);
-            palette.GripIdlePage = Color.FromArgb(15, 17, 21);
-            palette.GripHoverPage = Color.FromArgb(30, 32, 38);
-            palette.GripArc = Color.FromArgb(232, 236, 244);
             return palette;
         }
 
@@ -437,11 +473,6 @@ namespace DshFloatChat
             palette.ButtonHover = Color.FromArgb(233, 235, 238);
             palette.ButtonDown = Color.FromArgb(221, 224, 229);
             palette.Danger = Color.FromArgb(217, 45, 32);
-            palette.GripIdleHeader = Color.FromArgb(245, 246, 247);
-            palette.GripHoverHeader = Color.FromArgb(230, 233, 238);
-            palette.GripIdlePage = Color.FromArgb(255, 255, 255);
-            palette.GripHoverPage = Color.FromArgb(240, 242, 245);
-            palette.GripArc = Color.FromArgb(92, 99, 110);
             return palette;
         }
 
@@ -789,6 +820,79 @@ namespace DshFloatChat
             }
         }
 
+        private IntPtr FindDshMainWindow()
+        {
+            if (hostPid <= 0) return IntPtr.Zero;
+            using (Process host = Process.GetProcessById(hostPid))
+            {
+                IntPtr window = host.MainWindowHandle;
+                if (window != IntPtr.Zero || parentPid <= 0) return window;
+                // DSH Desktop runs the plugin Host in a child of Electron's GUI process.
+                using (Process parent = Process.GetProcessById(parentPid))
+                {
+                    if (String.Equals(host.ProcessName, parent.ProcessName, StringComparison.OrdinalIgnoreCase))
+                        return parent.MainWindowHandle;
+                }
+            }
+            return IntPtr.Zero;
+        }
+
+        private void RaiseMainWindow()
+        {
+            IntPtr window = IntPtr.Zero;
+            try { window = FindDshMainWindow(); }
+            catch (ArgumentException) { /* The DSH process closed. */ }
+            catch (InvalidOperationException) { /* The DSH process exited during lookup. */ }
+            catch (System.ComponentModel.Win32Exception error) { Program.Log("main window lookup failed: " + error.Message); }
+            if (window == IntPtr.Zero)
+            {
+                PostToPage("{\"type\":\"main-window-attention\",\"text\":\"未找到 DSH 主窗口，请从任务栏打开\"}");
+                return;
+            }
+            if (IsIconic(window)) ShowWindowAsync(window, SW_RESTORE);
+            if (SetForegroundWindow(window)) return;
+
+            FlashTaskbar(window);
+            PostToPage("{\"type\":\"main-window-attention\",\"text\":\"请点击任务栏上的 DSH，继续确认\"}");
+        }
+
+        private static void FlashTaskbar(IntPtr window)
+        {
+            WindowFlashInfo flash = new WindowFlashInfo();
+            flash.Size = (uint)Marshal.SizeOf(typeof(WindowFlashInfo));
+            flash.Window = window;
+            flash.Flags = FLASHW_TRAY;
+            flash.Count = 3;
+            FlashWindowEx(ref flash);
+        }
+
+        private void PollShowRequest()
+        {
+            if (showRequestFile == null || !File.Exists(showRequestFile)) return;
+            try
+            {
+                File.Delete(showRequestFile);
+            }
+            catch (IOException) { return; }
+            catch (UnauthorizedAccessException) { return; }
+
+            if (!Visible) Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            bool foreground = SetForegroundWindow(Handle);
+            if (!foreground) FlashTaskbar(Handle);
+            Program.Log("show request: restored float; foreground=" + foreground);
+        }
+
+        private bool IsFloatingPage(string source)
+        {
+            Uri expected;
+            Uri actual;
+            return Uri.TryCreate(pageUrl, UriKind.Absolute, out expected)
+                && Uri.TryCreate(source, UriKind.Absolute, out actual)
+                && Uri.Compare(expected, actual, UriComponents.SchemeAndServer | UriComponents.Path,
+                               UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
+        }
+
         /** 标题栏「清理」按钮 / 页面请求：清完把结果推回页面显示一条提示。 */
         private void CleanFromWindow()
         {
@@ -833,15 +937,9 @@ namespace DshFloatChat
             Restyle(cleanButton, palette.DimText);
             if (webView != null) webView.DefaultBackgroundColor = palette.PageFill;
             if (status != null) status.ForeColor = palette.Danger;
-            if (gripLeft != null)
+            foreach (ResizeGrip grip in resizeGrips)
             {
-                gripLeft.BackColor = palette.GripIdleHeader;
-                gripLeft.Invalidate();
-            }
-            if (gripRight != null)
-            {
-                gripRight.BackColor = palette.GripIdlePage;
-                gripRight.Invalidate();
+                if (grip != null) grip.Invalidate();
             }
             ApplyWebViewScheme();
             PushPageTheme();
@@ -930,6 +1028,41 @@ namespace DshFloatChat
             }
         }
 
+        [Flags]
+        private enum ResizeEdges
+        {
+            Left = 1,
+            Right = 2,
+            Top = 4,
+            Bottom = 8,
+            Horizontal = Left | Right,
+            Vertical = Top | Bottom
+        }
+
+        private sealed class ResizeGrip : Panel
+        {
+            internal readonly ResizeEdges Edges;
+            internal bool FromLeft { get { return (Edges & ResizeEdges.Left) != 0; } }
+            internal bool FromTop { get { return (Edges & ResizeEdges.Top) != 0; } }
+            internal bool IsCorner { get { return (Edges & ResizeEdges.Horizontal) != 0 && (Edges & ResizeEdges.Vertical) != 0; } }
+
+            internal ResizeGrip(ResizeEdges edges)
+            {
+                Edges = edges;
+                DoubleBuffered = true;
+                ResizeRedraw = true;
+                if (IsCorner) Cursor = FromLeft == FromTop ? Cursors.SizeNWSE : Cursors.SizeNESW;
+                else Cursor = (Edges & ResizeEdges.Horizontal) != 0 ? Cursors.SizeWE : Cursors.SizeNS;
+            }
+
+            internal System.Drawing.Drawing2D.Matrix CornerTransform()
+            {
+                return new System.Drawing.Drawing2D.Matrix(
+                    FromLeft ? 1 : -1, 0, 0, FromTop ? 1 : -1,
+                    FromLeft ? 0 : Width, FromTop ? 0 : Height);
+            }
+        }
+
         /** 双缓冲的 Label：标题文字同理。 */
         private sealed class BufferedLabel : Label
         {
@@ -939,10 +1072,14 @@ namespace DshFloatChat
             }
         }
 
-        internal FloatWindowForm(string authUrl, string pageUrl, string title, string headerName, string headerValue, string theme)
+        internal FloatWindowForm(string authUrl, string pageUrl, string title, string headerName, string headerValue, string theme,
+                                 int hostPid, int parentPid, Guid showRequestId)
         {
             this.authUrl = authUrl;
             this.pageUrl = pageUrl;
+            this.hostPid = hostPid;
+            this.parentPid = parentPid;
+            this.showRequestFile = showRequestId == Guid.Empty ? null : Path.Combine(AppDir, "show-request-" + showRequestId.ToString("D"));
             this.rendererHeaderName = headerName;
             this.rendererHeaderValue = headerValue;
             this.statePath = Path.Combine(AppDir, "window-state.txt");
@@ -1019,7 +1156,7 @@ namespace DshFloatChat
             tips.InitialDelay = 220;
             tips.ReshowDelay = 100;
             tips.AutoPopDelay = 9000;
-            tips.SetToolTip(newThread, "新对话（继承当前会话的上下文）");
+            tips.SetToolTip(newThread, "在选定分区新建对话");
             tips.SetToolTip(pinButton, "始终置顶：开 / 关");
             tips.SetToolTip(minimize, "最小化");
             tips.SetToolTip(close, "关闭（即用即焚开启时会删除本次记录）");
@@ -1076,22 +1213,29 @@ namespace DshFloatChat
             layout.Controls.Add(status, 0, 2);
             Controls.Add(layout);
 
-            // ---- resize grips (native, drawn over both bottom corners) ----
-            // Windows 自己的无边框缩放就是四角/四边热区；这里的 WebView2 盖住了客户区、
-            // 拿不到 WM_NCHITTEST，所以按标准做法在角上放两个 WinForms 手柄。
-            gripRight = MakeGrip(false);
-            gripLeft = MakeGrip(true);
-            Controls.Add(gripRight);
-            Controls.Add(gripLeft);
-            gripRight.BringToFront();
-            gripLeft.BringToFront();
+            // WebView2 owns input over its child window. Overlay narrow resize
+            // hit zones at the edges and corners.
+            resizeGrips[0] = MakeGrip(ResizeEdges.Left | ResizeEdges.Top);
+            resizeGrips[1] = MakeGrip(ResizeEdges.Right | ResizeEdges.Top);
+            resizeGrips[2] = MakeGrip(ResizeEdges.Left | ResizeEdges.Bottom);
+            resizeGrips[3] = MakeGrip(ResizeEdges.Right | ResizeEdges.Bottom);
+            resizeGrips[4] = MakeGrip(ResizeEdges.Left);
+            resizeGrips[5] = MakeGrip(ResizeEdges.Right);
+            resizeGrips[6] = MakeGrip(ResizeEdges.Top);
+            resizeGrips[7] = MakeGrip(ResizeEdges.Bottom);
+            foreach (ResizeGrip grip in resizeGrips)
+            {
+                Controls.Add(grip);
+                grip.BringToFront();
+            }
             PlaceGrips();
+            DpiChanged += delegate { PlaceGrips(); };
             Resize += delegate
             {
                 PlaceGrips();
                 // 拖角缩放时不要每移动一下就重建窗口区域：SetWindowRgn 会整窗重绘，
                 // 标题栏那种"一闪一闪"就是它。缩放期间先用直角，松手（MouseUp / ResizeEnd）再恢复圆角。
-                if (!resizing) ApplyRoundedRegion();
+                if (activeResizeGrip == null) ApplyRoundedRegion();
             };
             ClientSizeChanged += delegate { PlaceGrips(); };
 
@@ -1132,7 +1276,7 @@ namespace DshFloatChat
             // 用户在 DSH 里换外观（浅色 / 深色 / 跟随系统）时这个窗口当场跟着换。
             themeTimer = new Timer();
             themeTimer.Interval = 1000;
-            themeTimer.Tick += delegate { PollThemeFile(); PollSettingsFile(); };
+            themeTimer.Tick += delegate { PollShowRequest(); PollThemeFile(); PollSettingsFile(); };
             themeTimer.Start();
             // 设置页里点一下，窗口当场变（监视器），轮询只做兜底。
             ArmSettingsWatcher();
@@ -1585,86 +1729,41 @@ namespace DshFloatChat
         }
 
         /// <summary>
-        /// One corner resize handle. Both handles share one visual language — a
-        /// rounded corner bracket with two dots on the diagonal — but each is drawn
-        /// to face its own corner (top-left vs bottom-right), not as a mirror copy.
-        /// Live feedback: an eased highlight while the pointer is over it, accent
-        /// colour while dragging, so the affordance is obvious before you grab it.
+        /// Keep only the narrow outer L-shaped strip interactive, leaving the
+        /// composer and title buttons available inside the corner.
         /// </summary>
-        private Panel MakeGrip(bool topLeft)
+        private static void SizeCornerGrip(ResizeGrip grip, int side, double scale)
         {
-            Panel grip = new BufferedPanel();
-            grip.Size = new Size(GRIP_SIZE, GRIP_SIZE);
-            // 鼠标移上来必须变成双向缩放光标（左上/右下都在 ↘↖ 对角线上，用同一个光标）
-            grip.Cursor = Cursors.SizeNWSE;
-            /*
-             * 两个角用同一套几何：把面板裁成"贴着窗口角的 L 形缝"（缝宽 = 卡片到窗口边的
-             * 距离 8 CSS px，内边界是半径 16 CSS px 的圆角）。右下角那条缝正好避开输入卡片，
-             * 左上角同理（只是那里背后是标题栏，本来也看不见）。
-             */
-            double scale = DeviceDpi / 96.0;
+            if (grip.Width == side && grip.Height == side && grip.Region != null) return;
+            grip.Size = new Size(side, side);
             int margin = (int)Math.Round(8 * scale);
             int innerRadius = (int)Math.Round(16 * scale);
-            int side = grip.Width;
             using (System.Drawing.Drawing2D.GraphicsPath sliver = new System.Drawing.Drawing2D.GraphicsPath())
+            using (System.Drawing.Drawing2D.Matrix transform = grip.CornerTransform())
             {
                 // 凹角必须反向扫弧，奇偶(Alternate)填充会把区域算成空 -> 用非零环绕
                 sliver.FillMode = System.Drawing.Drawing2D.FillMode.Winding;
-                if (topLeft)
-                {
-                    sliver.AddLine(side, 0, 0, 0);
-                    sliver.AddLine(0, 0, 0, side);
-                    sliver.AddLine(0, side, margin, side);
-                    sliver.AddLine(margin, side, margin, margin + innerRadius);
-                    sliver.AddArc(margin, margin, innerRadius * 2, innerRadius * 2, 180F, -90F);
-                    sliver.AddLine(margin + innerRadius, margin, side, margin);
-                    sliver.CloseFigure();
-                }
-                else
-                {
-                    sliver.AddLine(side, 0, side, side);
-                    sliver.AddLine(side, side, 0, side);
-                    sliver.AddLine(0, side, 0, side - margin);
-                    sliver.AddLine(0, side - margin, side - margin - innerRadius, side - margin);
-                    sliver.AddArc(side - margin - innerRadius * 2, side - margin - innerRadius * 2, innerRadius * 2, innerRadius * 2, 90F, -90F);
-                    sliver.AddLine(side - margin, side - margin - innerRadius, side - margin, 0);
-                    sliver.CloseFigure();
-                }
+                sliver.AddLine(side, 0, 0, 0);
+                sliver.AddLine(0, 0, 0, side);
+                sliver.AddLine(0, side, margin, side);
+                sliver.AddLine(margin, side, margin, margin + innerRadius);
+                sliver.AddArc(margin, margin, innerRadius * 2, innerRadius * 2, 180F, -90F);
+                sliver.AddLine(margin + innerRadius, margin, side, margin);
+                sliver.CloseFigure();
+                sliver.Transform(transform);
                 grip.Region = new Region(sliver);
             }
-            float glow = 0F;          // 0 = idle, 1 = fully highlighted
-            float target = 0F;
-            bool pressed = false;
-            Timer ease = new Timer();
-            ease.Interval = 15;
-            ease.Tick += delegate
-            {
-                float step = 0.18F;
-                if (Math.Abs(target - glow) <= step)
-                {
-                    glow = target;
-                    ease.Stop();
-                }
-                else
-                {
-                    glow += target > glow ? step : -step;
-                }
-                grip.Invalidate();
-            };
+        }
 
+        private ResizeGrip MakeGrip(ResizeEdges edges)
+        {
+            ResizeGrip grip = new ResizeGrip(edges);
             grip.Paint += delegate(object sender, PaintEventArgs args)
             {
-                /*
-                 * 1) 铺底：先画页面色，再把“标题栏高度以内”的部分盖成标题栏色。
-                 *    手柄的 L 形缝会跨过标题栏下沿，只用一种底色就会露出一块色差。
-                 * 2) 括号：贴边、端头圆、转角很小（不再圆润），两端各延长一段。
-                 */
+                // Match the surface under the hit area, including the title bar boundary.
                 Graphics graphics = args.Graphics;
                 RectangleF area = new RectangleF(0F, 0F, grip.Width, grip.Height);
                 using (SolidBrush pageBrush = new SolidBrush(themePageFill)) graphics.FillRectangle(pageBrush, area);
-                // 只有“真的压在标题栏上”的那部分才铺标题栏色：
-                // 用绝对位置算（局部 y<46 对右下角手柄是错的，会在页面区域露出亮带，
-                // 白线压上去就显得比另一个角细）。
                 int headerHeight = headerPanel != null ? headerPanel.Height : 0;
                 int headerOverlap = headerHeight - grip.Top;
                 if (headerOverlap > 0)
@@ -1675,143 +1774,101 @@ namespace DshFloatChat
                         graphics.FillRectangle(headerBrush, new RectangleF(0F, 0F, grip.Width, bandHeight));
                     }
                 }
-
-                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                int radius = 12;
-                int extend = 20;                 // 两端各自延长的长度
-                float inset = 4F;
-                float far = inset + radius;
-
-                using (System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath())
-                {
-                    // 只有一条路径：右下角用 180° 旋转画同一个字形，
-                    // 这样粗细、长度、转角在两角之间不可能出现差异。
-                    System.Drawing.Drawing2D.GraphicsState state = graphics.Save();
-                    if (!topLeft)
-                    {
-                        graphics.TranslateTransform(grip.Width, grip.Height);
-                        graphics.RotateTransform(180F);
-                    }
-                    path.AddLine(inset, far + extend, inset, far);
-                    path.AddArc(inset, inset, radius * 2, radius * 2, 180F, 90F);
-                    path.AddLine(far, inset, far + extend, inset);
-                    int alpha = pressed ? 255 : (int)Math.Round(225 + 30 * glow);
-                    Color arc = pressed ? palette.Accent : Color.FromArgb(alpha, palette.GripArc);
-                    using (Pen pen = new Pen(arc, 5F))
-                    {
-                        pen.StartCap = System.Drawing.Drawing2D.LineCap.Round;
-                        pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                        pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
-                        graphics.DrawPath(pen, path);
-                    }
-                    graphics.Restore(state);
-                }
             };
-            grip.MouseEnter += delegate
-            {
-                target = 1F;
-                grip.BackColor = topLeft ? palette.GripHoverHeader : palette.GripHoverPage;
-                ease.Start();
-            };
-            grip.MouseLeave += delegate
-            {
-                // 无论是否在拖拽都要清掉“按下”外观，否则指针快速移出时弧线会一直停在 accent 蓝
-                pressed = false;
-                if (!resizing) target = 0F;
-                grip.BackColor = topLeft ? palette.GripIdleHeader : palette.GripIdlePage;
-                ease.Start();
-            };
-            // 拖拽中丢失鼠标捕获（指针移出控件并松开）时也要复位，避免 resizing 卡住
+            // Losing mouse capture also ends the drag and restores rounded corners.
             grip.MouseCaptureChanged += delegate
             {
-                if (grip.Capture) return;
-                if (!resizing && !pressed) return;
-                bool wasResizing = resizing;
-                resizing = false;
-                pressed = false;
-                target = 0F;
-                ease.Start();
-                if (wasResizing) { QueueSave(); ApplyRoundedRegion(); }
+                if (grip.Capture || activeResizeGrip != grip) return;
+                activeResizeGrip = null;
+                QueueSave();
+                ApplyRoundedRegion();
             };
             grip.MouseDown += delegate(object sender, MouseEventArgs args)
             {
                 if (args.Button != MouseButtons.Left) return;
-                pressed = true;
-                target = 1F;
-                resizing = true;
+                resizeOrigin = grip.PointToScreen(args.Location);
+                resizeStart = Bounds;
+                resizeWorkingArea = Screen.FromControl(this).WorkingArea;
+                grip.Capture = true;
+                activeResizeGrip = grip;
                 // 先撤区域，否则旧区域会把放大后的区域剪掉（见 ClearRoundedRegion）。
                 ClearRoundedRegion();
-                resizeFromLeft = topLeft;
-                resizeFromTop = topLeft;
-                resizeOrigin = Cursor.Position;
-                resizeStart = Size;
-                boundsStart = Location;
-                ease.Start();
-                grip.Invalidate();
             };
             grip.MouseMove += delegate
             {
-                if (resizing) ApplyResize();
+                if (activeResizeGrip == grip) ApplyResize(grip.Edges);
             };
             grip.MouseUp += delegate
             {
-                if (!resizing) return;
-                resizing = false;
-                pressed = false;
-                // 松手后指针通常还停在这里：保持点亮，移开才渐隐
-                target = grip.ClientRectangle.Contains(grip.PointToClient(Cursor.Position)) ? 1F : 0F;
-                ease.Start();
+                if (activeResizeGrip != grip) return;
+                ApplyResize(grip.Edges);
+                activeResizeGrip = null;
                 QueueSave();
                 ApplyRoundedRegion();
             };
             return grip;
         }
 
-        /// <summary>Linear colour blend used for the handle's eased hover feedback.</summary>
-        private static Color Blend(Color from, Color to, float amount)
-        {
-            float k = Math.Max(0F, Math.Min(1F, amount));
-            return Color.FromArgb(
-                (int)Math.Round(from.R + (to.R - from.R) * k),
-                (int)Math.Round(from.G + (to.G - from.G) * k),
-                (int)Math.Round(from.B + (to.B - from.B) * k));
-        }
-
         /// <summary>
-        /// Drag maths shared by both handles: the bottom-right handle moves the right
-        /// and bottom edges, the top-left handle moves the left and top edges, with
-        /// the opposite edges pinned — the same behaviour as a Windows sizing border.
+        /// Resize along the selected axes while holding the opposing edges in place.
         /// </summary>
-        private void ApplyResize()
+        private void ApplyResize(ResizeEdges edges)
         {
             Point now = Cursor.Position;
-            Rectangle work = Screen.FromControl(this).WorkingArea;
-            int dx = now.X - resizeOrigin.X;
-            int dy = now.Y - resizeOrigin.Y;
-            int width = resizeFromLeft ? resizeStart.Width - dx : resizeStart.Width + dx;
-            int height = resizeFromTop ? resizeStart.Height - dy : resizeStart.Height + dy;
-            int maxWidth = Math.Max(MinimumSize.Width, work.Width - 8);
-            int maxHeight = Math.Max(MinimumSize.Height, work.Height - 8);
-            width = Math.Min(Math.Max(MinimumSize.Width, width), maxWidth);
-            height = Math.Min(Math.Max(MinimumSize.Height, height), maxHeight);
-            int x = resizeFromLeft ? boundsStart.X + (resizeStart.Width - width) : boundsStart.X;
-            int y = resizeFromTop ? boundsStart.Y + (resizeStart.Height - height) : boundsStart.Y;
-            x = Math.Max(work.Left, Math.Min(x, work.Right - width));
-            y = Math.Max(work.Top, Math.Min(y, work.Bottom - height));
-            SetBounds(x, y, width, height);
+            Bounds = ResizedBounds(resizeStart, resizeWorkingArea, MinimumSize,
+                now.X - resizeOrigin.X, now.Y - resizeOrigin.Y, edges);
+        }
+
+        private static Rectangle ResizedBounds(Rectangle start, Rectangle work, Size minimum,
+                                               int dx, int dy, ResizeEdges edges)
+        {
+            Rectangle result = start;
+            if ((edges & ResizeEdges.Horizontal) != 0)
+            {
+                bool fromLeft = (edges & ResizeEdges.Left) != 0;
+                int width = start.Width + (fromLeft ? -dx : dx);
+                int maxWidth = fromLeft ? start.Right - work.Left : work.Right - start.Left;
+                result.Width = Math.Max(minimum.Width, Math.Min(width, Math.Min(maxWidth, work.Width)));
+                int x = fromLeft ? start.Right - result.Width : start.Left;
+                result.X = Math.Max(work.Left, Math.Min(x, work.Right - result.Width));
+            }
+            if ((edges & ResizeEdges.Vertical) != 0)
+            {
+                bool fromTop = (edges & ResizeEdges.Top) != 0;
+                int height = start.Height + (fromTop ? -dy : dy);
+                int maxHeight = fromTop ? start.Bottom - work.Top : work.Bottom - start.Top;
+                result.Height = Math.Max(minimum.Height, Math.Min(height, Math.Min(maxHeight, work.Height)));
+                int y = fromTop ? start.Bottom - result.Height : start.Top;
+                result.Y = Math.Max(work.Top, Math.Min(y, work.Bottom - result.Height));
+            }
+            return result;
         }
 
         private void PlaceGrips()
         {
-            if (gripRight != null)
+            double scale = DeviceDpi / 96.0;
+            int corner = (int)Math.Round(CORNER_GRIP_SIZE * scale);
+            int edge = (int)Math.Round(EDGE_GRIP_THICKNESS * scale);
+            Size client = ClientSize;
+            foreach (ResizeGrip grip in resizeGrips)
             {
-                gripRight.Location = new Point(
-                    Math.Max(0, ClientSize.Width - gripRight.Width),
-                    Math.Max(0, ClientSize.Height - gripRight.Height));
-            }
-            if (gripLeft != null)
-            {
-                gripLeft.Location = new Point(0, 0);
+                if (grip.IsCorner)
+                {
+                    SizeCornerGrip(grip, corner, scale);
+                    grip.Location = new Point(
+                        grip.FromLeft ? 0 : Math.Max(0, client.Width - corner),
+                        grip.FromTop ? 0 : Math.Max(0, client.Height - corner));
+                }
+                else if ((grip.Edges & ResizeEdges.Horizontal) != 0)
+                {
+                    grip.Bounds = new Rectangle(grip.FromLeft ? 0 : Math.Max(0, client.Width - edge),
+                        corner, edge, Math.Max(0, client.Height - 2 * corner));
+                }
+                else
+                {
+                    grip.Bounds = new Rectangle(corner, grip.FromTop ? 0 : Math.Max(0, client.Height - edge),
+                        Math.Max(0, client.Width - 2 * corner), edge);
+                }
             }
         }
 
@@ -1927,6 +1984,11 @@ namespace DshFloatChat
                     string payload = "";
                     try { payload = args.WebMessageAsJson; }
                     catch (Exception error) { Program.Log("page message unreadable: " + error.Message); }
+                    if (payload == "\"raise-main-window\"")
+                    {
+                        if (IsFloatingPage(args.Source)) BeginInvoke(new Action(RaiseMainWindow));
+                        return;
+                    }
                     Program.Log("page: " + payload);
                     // 页面脚本先于导航完成事件执行，所以它自己主动讨一次主题与设置：
                     // 不留深色闪现，也不让「即用即焚默认值」晚一拍生效。
