@@ -2,11 +2,15 @@
 
 # DSH Floating Window
 
+**简体中文** · [English](./README.en.md)
+
 **把 DSH 会话弹出为独立的桌面置顶悬浮窗**
 
 跨窗口多任务办公利器 · 压在任何 IDE / 浏览器之上 · 完整会话同步 · 实时流式响应
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20(Planned)-0078d4.svg)](#系统要求)
+**下载插件** · [Windows v1.0.0 下载（ZIP）](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/v1.0.0/dsh-floating-window-1.0.zip) · [macOS v1.0.0 下载（ZIP）](https://github.com/HeFenhenshuai/dsh-floating-window/releases/download/macos-v1.0.0/dsh-floating-window-macos-v1.0.0.zip)
+
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-0078d4.svg)](#系统要求)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![DeepSeek Harness Plugin](https://img.shields.io/badge/Plugin-DSH%20Desktop-blue.svg)](#安装指南)
 
@@ -38,7 +42,7 @@
 ## ✨ 核心特性
 
 - 🪟 **原生桌面级悬浮窗**
-  - **无边框圆角美学**：整条标题栏支持拖拽移动，双角支持原生平滑缩放。
+  - **符合常用操作习惯**：整条标题栏支持拖拽移动，双角支持原生平滑缩放。
   - **独立控制按钮**：标题栏自带「新建会话」、「始终置顶切换（图钉）」、「一键清理缓存」、「最小化」与「关闭」。
   - **快捷交互**：可选开启按 `Esc` 快速关闭浮窗；位置、大小与不透明度自动记忆。
 - 💬 **全功能会话管理**
@@ -56,41 +60,27 @@
 
 ---
 
-## 🗺️ 开发路线图 (Roadmap)
-
-- [x] **Windows 首发支持**：基于 WinForms + WebView2，支持置顶、透明度调节、几何记忆
-- [x] **完整会话功能**：多会话切换、流式接收、思考折叠、图片多模态上传、主窗口会话交接
-- [ ] **macOS 原生外壳支持（积极规划中 🚧）**：构建基于 Swift / WebKit 的轻量原生置顶外壳（核心宿主路由与 Web 页面已具备跨平台能力）
-- [ ] **全局快捷键**：支持快捷键一键呼出 / 隐藏浮窗
-- [ ] **快捷发送选中文字**：选中文本后快速发往悬浮窗提问
-
----
-
 ## 📋 系统要求
 
-| 组件 | 要求 | 说明 |
-| :--- | :--- | :--- |
-| **操作系统** | **Windows 10 / 11**（现已支持）<br>*macOS（计划中 🚧）* | 目前原生外壳采用 WinForms + WebView2 实现；macOS 原生外壳版本已列入开发计划 |
-| **宿主环境** | DSH Desktop（桌面版） | 依赖 Desktop 外壳的渲染器能力头，Web 版不可用 |
-| **运行时** | WebView2 Runtime | Windows 11 已内置；Windows 10 若缺失请前往微软官网安装 |
-| **依赖插件** | `@deepseek-ai/dsh-client-ui-conversation` | 硬依赖，用于向输入框右侧注入「浮窗」入口 |
+| 平台 | 系统要求 | 运行环境 |
+| --- | --- | --- |
+| Windows | Windows 10 / 11 | DSH Desktop 和 WebView2 Runtime |
+| macOS | macOS 12 或更高版本 | DSH Desktop，使用系统自带的 WKWebView |
+
+两个版本都需要启用 DSH 的会话插件 `@deepseek-ai/dsh-client-ui-conversation`，浮窗按钮会出现在聊天输入框旁。
 
 ---
 
 ## 📥 安装指南
 
-### 本地链接安装（推荐）
+### 把仓库链接发给 DSH 安装
 
-1. 下载或 Clone 本仓库到本地任意目录（例如 `D:\plugins\dsh-floating-window`）：
-   ```bash
-   git clone https://github.com/HeFenhenshuai/dsh-floating-window.git
-   ```
-2. 打开终端，使用 DSH CLI 添加本插件（或在 DSH Desktop 设置中的「插件 → 添加插件」中选择该目录）：
-   ```bash
-   dsh plugin --profile desktop add D:\plugins\dsh-floating-window
-   ```
-3. **⚠️ 关键步骤：重启 DSH Desktop**
-   > **注意**：由于 DSH 宿主插件模块常驻进程且缓存路径，**安装或更新后必须完全重启一次 DSH Desktop**，宿主路由才会生效。
+按你的系统复制下面一句，直接发到 DSH Desktop 的聊天框：
+
+- **Windows**：请帮我安装 DSH 悬浮窗插件，使用这个仓库的 `main` 分支：https://github.com/HeFenhenshuai/dsh-floating-window
+- **macOS（M 系列 Mac）**：请帮我安装 DSH 悬浮窗插件，使用这个仓库的 `macos` 分支：https://github.com/HeFenhenshuai/dsh-floating-window/tree/macos
+
+DSH 完成安装后，完全退出并重新打开 DSH Desktop，再点击聊天输入框旁的「浮窗」。
 
 ---
 
@@ -113,7 +103,7 @@
 | **始终置顶** (`alwaysOnTop`) | boolean | `true` | 是否保持压在其他所有应用窗口之上 | 即时生效 |
 | **不透明度** (`opacity`) | number (0.6 ~ 1.0) | `1.0` | 窗口整体透明度滑块 | 即时生效 |
 | **记住窗口位置** (`rememberGeometry`) | boolean | `true` | 下次打开时是否恢复上次拖拽的尺寸与坐标 | 下次开窗 |
-| **默认尺寸** (`defaultWidth` / `Height`) | 宽度 320~1600 / 高度 260~1600 | 620 × 900 | 未记忆几何尺寸时的初始窗口大小 (px) | 下次开窗 |
+| **默认尺寸** (`defaultWidth` / `Height`) | 宽度 320~1600 / 高度 260~1600 | Windows：620 × 900；macOS：406 × 571 | 未记忆几何尺寸时的初始窗口大小 (px) | 下次开窗 |
 | **按 Esc 关闭** (`closeOnEscape`) | boolean | `false` | 浮窗激活状态下按 `Esc` 键直接关闭窗口 | 即时生效 |
 
 ---
@@ -121,58 +111,46 @@
 ## ❓ 常见问题 (FAQ)
 
 <details>
-<summary><b>Q1: 什么时候支持 macOS？</b></summary>
-
-* **macOS 原生支持已在开发路线图中**。由于插件架构中：
-  - 宿主服务端（`host.js`）基于标准 Node.js
-  - 浮窗页面（`float.html`）与 DSH 注入脚本（`client.js`）均为纯标准 Web/JS 代码
-  - **核心跨平台逻辑已全部就绪**，目前仅需使用 Swift / WebKit 为 macOS 编写一个轻量级原生置顶窗口外壳即可完成适配。欢迎关注 Star 本仓库动态！
-</details>
-
-<details>
-<summary><b>Q2: 点击「浮窗」按钮后没有反应，或提示打开失败？</b></summary>
+<summary><b>Q1: 点击「浮窗」按钮后没有反应，或提示打开失败？</b></summary>
 
 1. **请确认是否在 DSH Desktop（桌面版）中运行**：Web 版由于缺少安全渲染器头，接口会直接拒绝开窗请求。
 2. **请确认是否已重启 DSH**：初次安装插件后必须完全退出并重启 DSH Desktop。
-3. **检查文件完整性**：插件依赖同级目录下的 `window/dsh-floating-window.exe`，请勿将 `plugin/` 目录单独移动剥离。
+3. **检查文件完整性**：打开安装插件时选择的文件夹。Windows 版应包含 `window/dsh-floating-window.exe`，macOS 版应包含 `window/dsh-floating-window.app`。`plugin/` 和 `window/` 需要放在一起。
+
+<details>
+<summary><b>Q2: 悬浮窗打开后显示白屏或提示 forbidden？</b></summary>
+
+* 请从 DSH Desktop 聊天输入框右侧的「浮窗」按钮打开窗口。这样 DSH 会为当前会话提供登录凭证。直接双击 Windows 的 `.exe` 或 macOS 的 `.app` 启动时，窗口拿不到这份凭证。
 </details>
 
 <details>
-<summary><b>Q3: 悬浮窗打开后显示白屏或提示 forbidden？</b></summary>
+<summary><b>Q3: 清理缓存会不会把我退出登录或删掉对话？</b></summary>
 
-* 请勿在文件夹中直接双击运行 `dsh-floating-window.exe`。原生窗口依赖 DSH 宿主实时签发的专属 Token 鉴权 URL，必须通过 DSH 输入框右侧的「浮窗」按钮拉起。
-</details>
-
-<details>
-<summary><b>Q4: 清理缓存会不会把我退出登录或删掉对话？</b></summary>
-
-* **不会**。清理程序针对的是 Chromium 纯渲染相关的 7 个 Cache 目录；存储登录凭证的 `Cookie` 与记录状态的 `LocalStorage` 均在排除列表之外，账号状态不受任何影响。
+* **不会**。Windows 版清理 WebView2 的渲染缓存，macOS 版清理 WebKit 的渲染缓存。两个版本都会保留登录信息和会话数据。
 </details>
 
 ---
 
 ## 🏗️ 架构与源码编译
-
 本项目采用三层协同架构：
+Windows 和 macOS 版本分别维护在两个分支中：
+
+- **Windows** 使用 `main` 分支，原生窗口基于 C#、WinForms 和 WebView2。下面的目录图和编译命令适用于 Windows 版。
+- **macOS** 使用 `macos` 分支，原生窗口基于 Swift、AppKit 和 WKWebView。[查看 Swift 源码](https://github.com/HeFenhenshuai/dsh-floating-window/tree/macos/window/src) · [查看构建脚本](https://github.com/HeFenhenshuai/dsh-floating-window/blob/macos/window/build.sh)
+
 ```text
 dsh-floating-window/
 ├── plugin/
 │   ├── host.js              # Node.js 宿主端：负责路由转发、鉴权令牌、拉起原生窗口进程
 │   ├── client.js            # DSH 前端扩展：输入框浮窗入口按钮、设置页面板
 │   └── page/float.html      # 悬浮窗内容页：精简版流式聊天界面、多模态附件、会话切换
-├── window/                  # Windows 原生窗口进程（macOS 版本规划中）
+├── window/                  # Windows 原生窗口进程
 │   ├── dsh-floating-window.exe  # 预编译的原生外壳程序
 │   └── src/FloatWindow.cs   # 窗口源码（约 2000 行，WinForms + WebView2，C# 5）
 └── docs/
     ├── preview.png          # 实机效果图（深色悬浮窗主界面）
     └── sessions.png         # 实机效果图（深色多会话切换与搜索）
 ```
-
-> **二次编译说明**：仓库已内置编译好的 `.exe` 与运行依赖，**普通用户无需安装 C# 编译器即可直接使用**。  
-> 若修改了 `FloatWindow.cs`，可在 `window/` 目录下调用 Windows 自带的 .NET Framework `csc.exe` 重新构建：
-> ```cmd
-> C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /platform:x64 /out:dsh-floating-window.exe /win32manifest:app.manifest /r:Microsoft.Web.WebView2.Core.dll /r:Microsoft.Web.WebView2.WinForms.dll /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Core.dll src\FloatWindow.cs
-> ```
 
 ---
 
