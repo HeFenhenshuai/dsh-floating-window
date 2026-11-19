@@ -175,6 +175,7 @@ dsh-floating-window/
 
 ## 🤝 致谢与开源协议
 
+- **项目维护者** [@HeFenhenshuai](https://github.com/HeFenhenshuai)
 - **交互设计与灵感**：本插件的悬浮窗交互构成与使用场景参考了 **豆包（Doubao）桌面端悬浮窗**（无边框置顶悬浮、多会话即时流转、一键交接回主窗口打开）。
 - **上游开源项目**：本项目基于社区项目 [dsh-float-chat](https://github.com/cyh3436332528/dsh-float-chat)（原作者 [@cyh3436332528](https://github.com/cyh3436332528)）的初始实现演进与维护，特此鸣谢。
 - 遵循 [MIT License](./LICENSE) 开源协议。

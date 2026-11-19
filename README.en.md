@@ -157,6 +157,7 @@ dsh-floating-window/
 
 ## Credits and license
 
+- **Maintainer** [@HeFenhenshuai](https://github.com/HeFenhenshuai)
 - **Design inspiration.** The Doubao (豆包) desktop app inspired the frameless, always-on-top interaction, quick session switching, and one-click return to the main window.
 - **Upstream project.** DSH Floating Window grew out of [dsh-float-chat](https://github.com/cyh3436332528/dsh-float-chat) by [@cyh3436332528](https://github.com/cyh3436332528).
 - Released under the [MIT License](./LICENSE).
